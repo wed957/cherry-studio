@@ -56,7 +56,9 @@ jobs:
       - name: Generate SHA256 checksums
         shell: pwsh
         run: |
-          $files = Get-ChildItem -LiteralPath dist -File
+          $files = Get-ChildItem -LiteralPath dist -File | Where-Object {
+            $_.Extension -in @('.exe', '.zip', '.blockmap') -or $_.Name -like 'latest*.yml'
+          }
           if (-not $files) { throw 'dist 目录没有生成构建产物' }
           $lines = foreach ($file in $files | Sort-Object Name) {
             $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
