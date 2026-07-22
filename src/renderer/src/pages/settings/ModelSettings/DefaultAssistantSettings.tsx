@@ -264,7 +264,9 @@ const AssistantSettings: FC = () => {
             step={1}
             value={contextCount}
             onChange={onContextCountChange}
-            formatter={(value) => (value === MAX_CONTEXT_COUNT ? t('chat.settings.max') : String(value ?? ''))}
+            formatter={(value, { userTyping, input }) =>
+              userTyping ? input : value === MAX_CONTEXT_COUNT ? t('chat.settings.max') : String(value ?? '')
+            }
             style={{ width: '100%' }}
           />
         </Col>
