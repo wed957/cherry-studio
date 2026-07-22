@@ -14,7 +14,8 @@ permissions:
   contents: write
 
 concurrency:
-  group: build-windows-${{ github.ref }}
+  # All builds using the rolling release share one lock; custom tags may run independently.
+  group: build-windows-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || 'windows-latest' }}
   cancel-in-progress: true
 
 jobs:

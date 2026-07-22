@@ -98,8 +98,8 @@ jobs:
             echo '没有需要提交的同步变更。'
           fi
 
-          git push origin main
           git push origin "$upstream_sha:refs/heads/upstream-v1"
+          git push origin main
 
       - name: Trigger Windows build explicitly
         env:

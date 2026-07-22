@@ -79,7 +79,9 @@ function scanBraces(source: string, start: number): number {
 }
 
 function maskCommentsAndStrings(source: string): string {
-  const chars = [...source]
+  // 按 UTF-16 code unit 保持与 String#slice/indexOf 的偏移一致；展开运算符会
+  // 折叠代理项，导致后续编辑位置错位。
+  const chars = source.split('')
   let mode: 'code' | 'lineComment' | 'blockComment' | 'single' | 'double' | 'template' = 'code'
   let escaped = false
 

@@ -56,4 +56,14 @@ describe('context-count-patch', () => {
     expect(result.content).toContain('aria-label="max=50"')
     expect(result.content).toContain('{/* max={60} */}')
   })
+
+  it('在字符串包含非 BMP 字符时仍保持编辑偏移正确', () => {
+    const source = `<InputNumber title="${'😀'.repeat(50)}" value={contextCount} max={20} />`
+
+    const result = patchContextCountSource(source)
+
+    expect(result.changed).toBe(1)
+    expect(result.content).not.toContain('max={20}')
+    expect(result.content).toContain(`title="${'😀'.repeat(50)}"`)
+  })
 })

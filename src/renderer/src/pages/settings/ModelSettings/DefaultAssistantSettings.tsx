@@ -4,7 +4,7 @@ import { ResetIcon } from '@renderer/components/Icons'
 import { HStack } from '@renderer/components/Layout'
 import Selector from '@renderer/components/Selector'
 import { TopView } from '@renderer/components/TopView'
-import { DEFAULT_CONTEXTCOUNT, DEFAULT_TEMPERATURE } from '@renderer/config/constant'
+import { DEFAULT_CONTEXTCOUNT, DEFAULT_TEMPERATURE, MAX_CONTEXT_COUNT } from '@renderer/config/constant'
 import { useTheme } from '@renderer/context/ThemeProvider'
 import { useDefaultAssistant } from '@renderer/hooks/useAssistant'
 import { DEFAULT_ASSISTANT_SETTINGS } from '@renderer/services/AssistantService'
@@ -264,6 +264,7 @@ const AssistantSettings: FC = () => {
             step={1}
             value={contextCount}
             onChange={onContextCountChange}
+            formatter={(value) => (value === MAX_CONTEXT_COUNT ? t('chat.settings.max') : String(value ?? ''))}
             style={{ width: '100%' }}
           />
         </Col>
