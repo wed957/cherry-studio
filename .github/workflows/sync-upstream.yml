@@ -1,0 +1,107 @@
+name: Sync upstream v1
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * *'
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+
+      - name: Merge upstream v1
+        id: merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          git switch main
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream https://github.com/CherryHQ/cherry-studio.git 2>/dev/null || \
+            git remote set-url upstream https://github.com/CherryHQ/cherry-studio.git
+          git fetch --no-tags upstream v1
+          upstream_sha="$(git rev-parse FETCH_HEAD)"
+          echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
+
+          set +e
+          git merge --no-ff --no-commit "$upstream_sha"
+          merge_status=$?
+          set -e
+
+          if [ "$merge_status" -ne 0 ]; then
+            conflicts="$(git diff --name-only --diff-filter=U)"
+            if [ -z "$conflicts" ]; then
+              echo 'git merge 未完成且没有可自动解决的冲突，停止同步。'
+              git merge --abort || true
+              exit 1
+            fi
+            non_workflow="$(printf '%s\n' "$conflicts" | awk 'NF && $0 !~ /^\.github\/workflows\//')"
+            if [ -n "$non_workflow" ]; then
+              echo '上游同步存在源码冲突，未自动覆盖本地修复：'
+              printf '%s\n' "$non_workflow"
+              git merge --abort
+              exit 1
+            fi
+
+            while IFS= read -r file; do
+              [ -z "$file" ] && continue
+              if git checkout --ours -- "$file" 2>/dev/null; then
+                git add -- "$file"
+              else
+                git rm -f --ignore-unmatch -- "$file"
+              fi
+            done <<< "$conflicts"
+          fi
+
+          unresolved="$(git diff --name-only --diff-filter=U)"
+          if [ -n "$unresolved" ]; then
+            echo '无法自动解决同步冲突：'
+            printf '%s\n' "$unresolved"
+            git merge --abort || true
+            exit 1
+          fi
+
+          # 私有衍生仓库只保留自己的 workflow，提交合并前删除上游新增的 workflow。
+          find .github/workflows -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) \
+            ! -name 'sync-upstream.yml' ! -name 'build-windows.yml' -print -delete
+
+          node --experimental-strip-types scripts/context-count-patch.ts \
+            --root src/renderer/src --write --require-targets --expected-targets 2
+          node --experimental-strip-types scripts/context-count-patch.ts \
+            --root src/renderer/src --require-targets --expected-targets 2
+
+          git add -A
+          if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+            git commit -m "chore(sync): merge upstream v1 @ ${upstream_sha:0:12}"
+          elif ! git diff --cached --quiet; then
+            git commit -m "chore(sync): reapply context-count patch"
+          else
+            echo '没有需要提交的同步变更。'
+          fi
+
+          git push origin main
+          git push origin "$upstream_sha:refs/heads/upstream-v1"
+
+      - name: Trigger Windows build explicitly
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run build-windows.yml --repo "$GITHUB_REPOSITORY" --ref main

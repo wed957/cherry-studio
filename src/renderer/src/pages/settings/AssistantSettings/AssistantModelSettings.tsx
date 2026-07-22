@@ -19,6 +19,7 @@ import { SettingRow } from '@renderer/pages/settings'
 import { DEFAULT_ASSISTANT_SETTINGS } from '@renderer/services/AssistantService'
 import type { Assistant, AssistantSettingCustomParameters, AssistantSettings, Model } from '@renderer/types'
 import { modalConfirm } from '@renderer/utils'
+import { isValidContextCount, sanitizeContextCount } from '@renderer/utils/contextCount'
 import { Button, Col, Divider, Input, InputNumber, Row, Select, Slider, Switch, Tooltip } from 'antd'
 import { isNull } from 'lodash'
 import { PlusIcon } from 'lucide-react'
@@ -36,6 +37,7 @@ interface Props {
 const AssistantModelSettings: FC<Props> = ({ assistant, updateAssistant, updateAssistantSettings }) => {
   const [temperature, setTemperature] = useState(assistant?.settings?.temperature ?? DEFAULT_TEMPERATURE)
   const [contextCount, setContextCount] = useState(assistant?.settings?.contextCount ?? DEFAULT_CONTEXTCOUNT)
+  const contextCountSliderValue = Math.min(sanitizeContextCount(contextCount), MAX_CONTEXT_COUNT)
   const enableMaxTokens = useMemo(
     () => assistant?.settings?.enableMaxTokens ?? DEFAULT_ASSISTANT_SETTINGS.enableMaxTokens,
     [assistant?.settings?.enableMaxTokens]
@@ -383,12 +385,11 @@ const AssistantModelSettings: FC<Props> = ({ assistant, updateAssistant, updateA
         <Col span={4}>
           <EditableNumber
             min={0}
-            max={MAX_CONTEXT_COUNT}
             step={1}
             value={contextCount}
             changeOnBlur
             onChange={(value) => {
-              if (!isNull(value)) {
+              if (isValidContextCount(value)) {
                 setContextCount(value)
                 setTimeoutTimer('contextCount_onChange', () => updateAssistantSettings({ contextCount: value }), 500)
               }
@@ -406,7 +407,7 @@ const AssistantModelSettings: FC<Props> = ({ assistant, updateAssistant, updateA
               max={MAX_CONTEXT_COUNT}
               onChange={setContextCount}
               onChangeComplete={onContextCountChange}
-              value={typeof contextCount === 'number' ? contextCount : 0}
+              value={contextCountSliderValue}
               marks={{
                 0: '0',
                 25: '25',

@@ -1,11 +1,5 @@
 import { loggerService } from '@logger'
-import {
-  DEFAULT_CONTEXTCOUNT,
-  DEFAULT_MAX_TOKENS,
-  DEFAULT_TEMPERATURE,
-  MAX_CONTEXT_COUNT,
-  UNLIMITED_CONTEXT_COUNT
-} from '@renderer/config/constant'
+import { DEFAULT_CONTEXTCOUNT, DEFAULT_MAX_TOKENS, DEFAULT_TEMPERATURE } from '@renderer/config/constant'
 import { getModelSupportedReasoningEffortOptions } from '@renderer/config/models'
 import { isQwenMTModel } from '@renderer/config/models/qwen'
 import { UNKNOWN } from '@renderer/config/translate'
@@ -23,6 +17,7 @@ import type {
   TranslateAssistant,
   TranslateLanguage
 } from '@renderer/types'
+import { resolveContextCount } from '@renderer/utils/contextCount'
 import { v4 as uuid } from 'uuid'
 
 const logger = loggerService.withContext('AssistantService')
@@ -241,7 +236,7 @@ export const getAssistantSettings = (assistant: Assistant): AssistantSettings =>
   }
 
   return {
-    contextCount: contextCount === MAX_CONTEXT_COUNT ? UNLIMITED_CONTEXT_COUNT : contextCount,
+    contextCount: resolveContextCount(contextCount),
     temperature: assistant?.settings?.temperature ?? DEFAULT_TEMPERATURE,
     enableTemperature: assistant?.settings?.enableTemperature ?? DEFAULT_ASSISTANT_SETTINGS.enableTemperature,
     topP: assistant?.settings?.topP ?? DEFAULT_ASSISTANT_SETTINGS.topP,

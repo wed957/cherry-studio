@@ -50,6 +50,8 @@
     "skills:sync": "tsx scripts/skills-sync.ts",
     "skills:check": "tsx scripts/skills-check.ts",
     "update:languages": "tsx scripts/update-languages.ts",
+    "context-count:check": "node --experimental-strip-types scripts/context-count-patch.ts --root src/renderer/src --require-targets --expected-targets 2",
+    "context-count:apply": "node --experimental-strip-types scripts/context-count-patch.ts --root src/renderer/src --write --require-targets --expected-targets 2",
     "test": "vitest run --silent",
     "test:main": "vitest run --project main",
     "test:renderer": "vitest run --project renderer",

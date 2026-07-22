@@ -1,0 +1,107 @@
+name: Build Windows
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'GitHub Release tag; blank uses the rolling windows-latest tag'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.ref || github.sha }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.27.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify context-count patch
+        run: pnpm context-count:check
+
+      - name: Build Windows x64 and arm64
+        run: pnpm build:win
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+          MAIN_VITE_CHERRYAI_CLIENT_SECRET: ${{ secrets.MAIN_VITE_CHERRYAI_CLIENT_SECRET }}
+          MAIN_VITE_MINERU_API_KEY: ${{ secrets.MAIN_VITE_MINERU_API_KEY }}
+          RENDERER_VITE_AIHUBMIX_SECRET: ${{ secrets.RENDERER_VITE_AIHUBMIX_SECRET }}
+          RENDERER_VITE_PPIO_APP_SECRET: ${{ secrets.RENDERER_VITE_PPIO_APP_SECRET }}
+
+      - name: Generate SHA256 checksums
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -LiteralPath dist -File
+          if (-not $files) { throw 'dist 目录没有生成构建产物' }
+          $lines = foreach ($file in $files | Sort-Object Name) {
+            $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($file.Name)"
+          }
+          $lines | Set-Content -LiteralPath dist/SHA256SUMS.txt -Encoding utf8NoBOM
+          Get-Content dist/SHA256SUMS.txt
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cherry-studio-windows-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Resolve release tag
+        id: release
+        shell: pwsh
+        env:
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+        run: |
+          $tag = $env:RELEASE_TAG_INPUT
+          if ([string]::IsNullOrWhiteSpace($tag)) { $tag = 'windows-latest' }
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Move rolling release tag to this build
+        if: steps.release.outputs.tag == 'windows-latest'
+        shell: pwsh
+        run: |
+          git tag --force windows-latest $env:GITHUB_SHA
+          git push origin refs/tags/windows-latest --force
+
+      - name: Publish rolling Windows GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+          # 发布配置关闭时，electron-builder 可能不会生成 blockmap 或 latest*.yml。
+          fail_on_unmatched_files: false
+          files: |
+            dist/*.exe
+            dist/*.zip
+            dist/latest*.yml
+            dist/*.blockmap
+            dist/SHA256SUMS.txt

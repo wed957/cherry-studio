@@ -65,6 +65,8 @@
 
 Cherry Studio is a desktop client that supports multiple LLM providers, available on Windows, Mac and Linux.
 
+> This private derivative follows upstream `v1`, keeps the generalized context-count fix, and builds Windows artifacts through GitHub Actions. See [CUSTOM_BUILD.md](./CUSTOM_BUILD.md) for synchronization, release, updater, and AGPL-3.0 notes.
+
 👏 Join [Telegram Group](https://t.me/CherryStudioAI)｜[Discord](https://discord.gg/wez8HtpxqQ) | [QQ Group(575014769)](https://qm.qq.com/q/lo0D4qVZKi)
 
 ❤️ Like Cherry Studio? Give it a star 🌟 or [Sponsor](docs/zh/guides/sponsor.md) to support the development!

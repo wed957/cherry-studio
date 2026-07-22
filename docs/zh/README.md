@@ -68,6 +68,8 @@
 
 Cherry Studio 是一款支持多个大语言模型（LLM）服务商的桌面客户端，兼容 Windows、Mac 和 Linux 系统。
 
+> 本私有衍生仓库跟随上游 `v1`，合并了泛化的上下文数量修复，并通过 GitHub Actions 只构建 Windows。同步、发布、自动更新限制和 AGPL-3.0 义务请参阅根目录的 [CUSTOM_BUILD.md](../../CUSTOM_BUILD.md)。
+
 👏 欢迎加入 [Telegram 群组](https://t.me/CherryStudioAI)｜[Discord](https://discord.gg/wez8HtpxqQ) | [QQ群(575014769)](https://qm.qq.com/q/lo0D4qVZKi)
 
 ❤️ 喜欢 Cherry Studio? 点亮小星星 🌟 或 [赞助开发者](./guides/sponsor.md)! ❤️

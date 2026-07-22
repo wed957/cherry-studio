@@ -1,6 +1,6 @@
 import { loggerService } from '@logger'
 import SearchPopup from '@renderer/components/Popups/SearchPopup'
-import { DEFAULT_CONTEXTCOUNT, MAX_CONTEXT_COUNT, UNLIMITED_CONTEXT_COUNT } from '@renderer/config/constant'
+import { DEFAULT_CONTEXTCOUNT } from '@renderer/config/constant'
 import { getTopicById } from '@renderer/hooks/useTopic'
 import i18n from '@renderer/i18n'
 import { fetchMessagesSummary } from '@renderer/services/ApiService'
@@ -12,6 +12,7 @@ import { FILE_TYPE } from '@renderer/types'
 import type { Message, MessageBlock } from '@renderer/types/newMessage'
 import { AssistantMessageStatus, MessageBlockStatus, MessageBlockType } from '@renderer/types/newMessage'
 import { uuid } from '@renderer/utils'
+import { resolveContextCount, sanitizeContextCount } from '@renderer/utils/contextCount'
 import { getTitleFromString } from '@renderer/utils/export'
 import {
   createAssistantMessage,
@@ -44,8 +45,8 @@ export {
 } from '@renderer/utils/messageUtils/filters'
 
 export function getContextCount(assistant: Assistant, messages: Message[]) {
-  const settingContextCount = assistant?.settings?.contextCount ?? DEFAULT_CONTEXTCOUNT
-  const actualContextCount = settingContextCount === MAX_CONTEXT_COUNT ? UNLIMITED_CONTEXT_COUNT : settingContextCount
+  const settingContextCount = sanitizeContextCount(assistant?.settings?.contextCount ?? DEFAULT_CONTEXTCOUNT)
+  const actualContextCount = resolveContextCount(settingContextCount)
 
   const contextMsgs = filterContextMessages(messages, actualContextCount)
 

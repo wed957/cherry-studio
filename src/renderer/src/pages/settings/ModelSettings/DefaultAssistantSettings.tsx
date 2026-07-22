@@ -10,6 +10,7 @@ import { useDefaultAssistant } from '@renderer/hooks/useAssistant'
 import { DEFAULT_ASSISTANT_SETTINGS } from '@renderer/services/AssistantService'
 import type { AssistantSettings as AssistantSettingsType } from '@renderer/types'
 import { getLeadingEmoji, modalConfirm } from '@renderer/utils'
+import { isValidContextCount, sanitizeContextCount } from '@renderer/utils/contextCount'
 import { Button, Col, Divider, Flex, Input, InputNumber, Modal, Popover, Row, Slider, Switch, Tooltip } from 'antd'
 import TextArea from 'antd/es/input/TextArea'
 import type { Dispatch, FC, SetStateAction } from 'react'
@@ -24,6 +25,7 @@ const AssistantSettings: FC = () => {
   const [temperature, setTemperature] = useState(defaultAssistant.settings?.temperature ?? DEFAULT_TEMPERATURE)
   const [enableTemperature, setEnableTemperature] = useState(defaultAssistant.settings?.enableTemperature ?? false)
   const [contextCount, setContextCount] = useState(defaultAssistant.settings?.contextCount ?? DEFAULT_CONTEXTCOUNT)
+  const contextCountSliderValue = Math.min(sanitizeContextCount(contextCount), 20)
   const [enableMaxTokens, setEnableMaxTokens] = useState(defaultAssistant?.settings?.enableMaxTokens ?? false)
   const [maxTokens, setMaxTokens] = useState(defaultAssistant?.settings?.maxTokens ?? 0)
   const [topP, setTopP] = useState(defaultAssistant.settings?.topP ?? 1)
@@ -65,9 +67,12 @@ const AssistantSettings: FC = () => {
       }
     }
   const onTemperatureChange = handleChange(setTemperature, (value) => onUpdateAssistantSettings({ temperature: value }))
-  const onContextCountChange = handleChange(setContextCount, (value) =>
-    onUpdateAssistantSettings({ contextCount: value })
-  )
+  const onContextCountChange = (value: number | null) => {
+    if (isValidContextCount(value)) {
+      setContextCount(value)
+      onUpdateAssistantSettings({ contextCount: value })
+    }
+  }
   const onMaxTokensChange = handleChange(setMaxTokens, (value) => onUpdateAssistantSettings({ maxTokens: value }))
   const onTopPChange = handleChange(setTopP, (value) => onUpdateAssistantSettings({ topP: value }))
 
@@ -249,14 +254,13 @@ const AssistantSettings: FC = () => {
             marks={{ 0: '0', 5: '5', 10: '10', 15: '15', 20: t('chat.settings.max') }}
             onChange={setContextCount}
             onChangeComplete={onContextCountChange}
-            value={typeof contextCount === 'number' ? contextCount : 0}
+            value={contextCountSliderValue}
             step={1}
           />
         </Col>
         <Col span={5}>
           <InputNumber
             min={0}
-            max={20}
             step={1}
             value={contextCount}
             onChange={onContextCountChange}

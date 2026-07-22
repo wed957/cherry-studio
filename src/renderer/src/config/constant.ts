@@ -44,6 +44,8 @@ export const THEME_COLOR_PRESETS = [
 ]
 
 export const MAX_CONTEXT_COUNT = 100
-export const UNLIMITED_CONTEXT_COUNT = 100000
+// The sentinel value is translated to a sufficiently large slice size at runtime.
+// Number.MAX_SAFE_INTEGER keeps the UI sentinel (100) distinct from real counts.
+export const UNLIMITED_CONTEXT_COUNT = Number.MAX_SAFE_INTEGER
 
 export const MAX_COLLAPSED_CODE_HEIGHT = 350
