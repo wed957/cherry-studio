@@ -215,19 +215,21 @@ jobs:
         run: pnpm exec vitest run scripts/context-count-patch.test.ts --silent
 
       - name: Run main unit tests
-        run: pnpm exec vitest run --silent --project=main
+        # Windows runners have crashed mid-suite under the default threads pool with --silent.
+        # forks + capped workers keep isolation; reporter=dot still surfaces failures.
+        run: pnpm exec vitest run --project=main --pool=forks --maxWorkers=2 --minWorkers=1 --reporter=dot
 
       - name: Run renderer unit tests
-        run: pnpm exec vitest run --silent --project=renderer --pool=forks --maxWorkers=2 --minWorkers=1 --reporter=dot
+        run: pnpm exec vitest run --project=renderer --pool=forks --maxWorkers=2 --minWorkers=1 --reporter=dot
 
       - name: Run aiCore unit tests
-        run: pnpm exec vitest run --silent --project=aiCore
+        run: pnpm exec vitest run --project=aiCore --pool=forks --maxWorkers=2 --minWorkers=1 --reporter=dot
 
       - name: Run shared unit tests
-        run: pnpm exec vitest run --silent --project=shared --pool=forks
+        run: pnpm exec vitest run --project=shared --pool=forks --maxWorkers=2 --minWorkers=1 --reporter=dot
 
       - name: Run script unit tests
-        run: pnpm exec vitest run --silent --project=scripts
+        run: pnpm exec vitest run --project=scripts --pool=forks --maxWorkers=2 --minWorkers=1 --reporter=dot
 
       - name: Run complete non-writing CI checks
         run: pnpm ci:basic-check
