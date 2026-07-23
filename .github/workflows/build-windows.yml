@@ -5,35 +5,202 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      source_sha:
+        description: 'Exact 40-character commit SHA; blank uses the triggering commit'
+        required: false
+        type: string
       release_tag:
         description: 'GitHub Release tag; blank uses the rolling windows-latest tag'
         required: false
         type: string
+  workflow_call:
+    inputs:
+      source_sha:
+        description: 'Exact candidate commit SHA to check out and build'
+        required: true
+        type: string
+      release_tag:
+        required: false
+        default: windows-latest
+        type: string
+      publish_only:
+        description: 'Skip build and repair the rolling release from a published immutable release'
+        required: false
+        default: false
+        type: boolean
+      promote_candidate:
+        required: false
+        default: false
+        type: boolean
+      candidate_ref:
+        required: false
+        default: ''
+        type: string
+      upstream_sha:
+        required: false
+        default: ''
+        type: string
+      expected_main_sha:
+        required: false
+        default: ''
+        type: string
+      expected_upstream_sha:
+        required: false
+        default: ''
+        type: string
+    secrets:
+      MAIN_VITE_CHERRYAI_CLIENT_SECRET:
+        required: false
+      MAIN_VITE_MINERU_API_KEY:
+        required: false
+      RENDERER_VITE_AIHUBMIX_SECRET:
+        required: false
+      RENDERER_VITE_PPIO_APP_SECRET:
+        required: false
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  # All builds using the rolling release share one lock; custom tags may run independently.
-  group: build-windows-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || 'windows-latest' }}
-  cancel-in-progress: true
+  group: build-windows-release-transaction
+  cancel-in-progress: false
 
 jobs:
-  build:
-    runs-on: windows-2022
+  resolve:
+    name: Resolve immutable source
+    runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      release_tag: ${{ steps.source.outputs.release_tag }}
+      promote_candidate: ${{ steps.source.outputs.promote_candidate }}
+      candidate_ref: ${{ steps.source.outputs.candidate_ref }}
+      artifact_name: ${{ steps.source.outputs.artifact_name }}
+      immutable_tag: ${{ steps.source.outputs.immutable_tag }}
+      publish_only: ${{ steps.source.outputs.publish_only }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - name: Validate workflow inputs
+        id: source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA_INPUT: ${{ inputs.source_sha }}
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+          PROMOTE_INPUT: ${{ inputs.promote_candidate }}
+          PUBLISH_ONLY_INPUT: ${{ inputs.publish_only }}
+          CANDIDATE_REF_INPUT: ${{ inputs.candidate_ref }}
+        run: |
+          set -euo pipefail
+
+          if [ "$GITHUB_REPOSITORY" != 'wed957/cherry-studio' ]; then
+            echo "::error title=Repository scope violation::Expected wed957/cherry-studio, got $GITHUB_REPOSITORY."
+            exit 1
+          fi
+          repo_json="$(gh api "repos/$GITHUB_REPOSITORY")"
+          if ! jq -e '(.private == true) and (.fork == false) and (.parent == null) and (.source == null)' \
+            <<<"$repo_json" >/dev/null; then
+            echo '::error title=Repository safety preflight failed::Windows publication requires a private standalone repository, not a fork.'
+            exit 1
+          fi
+
+          source_sha="${SOURCE_SHA_INPUT:-$GITHUB_SHA}"
+          source_sha="${source_sha,,}"
+          if ! [[ "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=Invalid source SHA::Expected a full 40-character commit SHA, got '$source_sha'."
+            exit 1
+          fi
+
+          release_tag="${RELEASE_TAG_INPUT:-windows-latest}"
+          if [[ "$release_tag" == -* ]]; then
+            echo '::error title=Invalid release tag::Release tags must not begin with a hyphen.'
+            exit 1
+          fi
+          if ! git check-ref-format "refs/tags/$release_tag" >/dev/null 2>&1; then
+            echo "::error title=Invalid release tag::$release_tag is not a valid Git tag."
+            exit 1
+          fi
+
+          promote_candidate=false
+          if [ "${PROMOTE_INPUT,,}" = 'true' ]; then
+            promote_candidate=true
+          fi
+
+          if [ -n "$CANDIDATE_REF_INPUT" ] && \
+            ! git check-ref-format "refs/heads/$CANDIDATE_REF_INPUT" >/dev/null 2>&1; then
+            echo "::error title=Invalid candidate ref::$CANDIDATE_REF_INPUT is not a valid branch name."
+            exit 1
+          fi
+
+          if [[ "$release_tag" =~ ^windows-[0-9a-fA-F]{40}$ ]]; then
+            echo '::error title=Reserved release tag::The entire windows-<40-hex-SHA> namespace is reserved for immutable releases.'
+            exit 1
+          fi
+          immutable_tag="windows-$source_sha"
+
+          publish_only=false
+          if [ "${PUBLISH_ONLY_INPUT,,}" = 'true' ]; then
+            publish_only=true
+          fi
+          if [ "$publish_only" = 'true' ] && [ "$release_tag" != 'windows-latest' ]; then
+            echo '::error title=Invalid publish-only target::Publish-only recovery is restricted to windows-latest.'
+            exit 1
+          fi
+          if [ "$publish_only" = 'true' ] && [ "$promote_candidate" = 'true' ]; then
+            echo '::error title=Invalid publish-only promotion::Publish-only recovery cannot promote a candidate.'
+            exit 1
+          fi
+
+          {
+            echo "source_sha=$source_sha"
+            echo "release_tag=$release_tag"
+            echo "promote_candidate=$promote_candidate"
+            echo "publish_only=$publish_only"
+            echo "candidate_ref=$CANDIDATE_REF_INPUT"
+            echo "artifact_name=cherry-studio-windows-$source_sha-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            echo "immutable_tag=$immutable_tag"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo '## Windows candidate'
+            echo
+            echo "Source SHA: \`$source_sha\`"
+            echo "Release tag: \`$release_tag\`"
+            echo "Immutable tag: \`$immutable_tag\`"
+            echo "Promotion requested: \`$promote_candidate\`"
+            echo "Publish-only recovery: \`$publish_only\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Test and build Windows x64/arm64
+    needs: resolve
+    if: needs.resolve.outputs.publish_only != 'true'
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact source SHA
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.ref || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.resolve.outputs.source_sha }}
+
+      - name: Verify checked out source SHA
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+        run: |
+          $actual = (git rev-parse HEAD).Trim().ToLowerInvariant()
+          if ($actual -ne $env:SOURCE_SHA) {
+            throw "Checkout resolved to $actual instead of $($env:SOURCE_SHA)."
+          }
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 10.27.0
 
       - name: Install Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .node-version
           cache: pnpm
@@ -41,8 +208,39 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Verify context-count patch
+      - name: Verify context-count contract
         run: pnpm context-count:check
+
+      - name: Run context-count patch tests
+        run: pnpm exec vitest run scripts/context-count-patch.test.ts --silent
+
+      - name: Run main unit tests
+        run: pnpm exec vitest run --silent --project=main
+
+      - name: Run renderer unit tests
+        run: pnpm exec vitest run --silent --project=renderer --pool=forks --maxWorkers=2 --minWorkers=1 --reporter=dot
+
+      - name: Run aiCore unit tests
+        run: pnpm exec vitest run --silent --project=aiCore
+
+      - name: Run shared unit tests
+        run: pnpm exec vitest run --silent --project=shared --pool=forks
+
+      - name: Run script unit tests
+        run: pnpm exec vitest run --silent --project=scripts
+
+      - name: Run complete non-writing CI checks
+        run: pnpm ci:basic-check
+
+      - name: Verify candidate checks left tracked tree clean
+        shell: pwsh
+        run: |
+          $changes = @(git status --porcelain=v1 --untracked-files=no)
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect the tracked worktree.' }
+          if ($changes.Count -gt 0) {
+            $changes | ForEach-Object { Write-Host $_ }
+            throw 'Candidate checks modified tracked files.'
+          }
 
       - name: Build Windows x64 and arm64
         run: pnpm build:win
@@ -53,58 +251,1608 @@ jobs:
           RENDERER_VITE_AIHUBMIX_SECRET: ${{ secrets.RENDERER_VITE_AIHUBMIX_SECRET }}
           RENDERER_VITE_PPIO_APP_SECRET: ${{ secrets.RENDERER_VITE_PPIO_APP_SECRET }}
 
-      - name: Generate SHA256 checksums
+      - name: Verify build left tracked tree clean
         shell: pwsh
         run: |
-          $files = Get-ChildItem -LiteralPath dist -File | Where-Object {
+          $changes = @(git status --porcelain=v1 --untracked-files=no)
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to inspect the tracked worktree.' }
+          if ($changes.Count -gt 0) {
+            $changes | ForEach-Object { Write-Host $_ }
+            throw 'Windows build modified tracked files.'
+          }
+
+      - name: Stage release allowlist and generate SHA256 checksums
+        shell: pwsh
+        run: |
+          $workspace = [IO.Path]::GetFullPath((Get-Location).Path)
+          $workspacePrefix = $workspace.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+          $dist = Get-Item -LiteralPath (Join-Path $workspace 'dist') -Force
+          if (-not $dist.PSIsContainer -or
+              ($dist.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+              $dist.LinkType) {
+            throw 'dist must be a real directory, not a symlink, junction, or reparse point.'
+          }
+          $distPath = [IO.Path]::GetFullPath($dist.FullName)
+          if (-not $distPath.StartsWith($workspacePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "dist resolves outside the workspace: $distPath"
+          }
+          $distPrefix = $distPath.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+
+          $staging = Join-Path $workspace 'release-staging'
+          if (Test-Path -LiteralPath $staging) { throw 'release-staging already exists.' }
+          New-Item -ItemType Directory -Path $staging | Out-Null
+
+          $files = Get-ChildItem -LiteralPath $distPath -Force -File | Where-Object {
             $_.Extension -in @('.exe', '.zip', '.blockmap') -or $_.Name -like 'latest*.yml'
           }
-          if (-not $files) { throw 'dist 目录没有生成构建产物' }
-          $lines = foreach ($file in $files | Sort-Object Name) {
+          if (-not $files) { throw 'No releasable files were generated in dist.' }
+
+          foreach ($file in $files) {
+            $assetPath = [IO.Path]::GetFullPath($file.FullName)
+            if (($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $file.LinkType) {
+              throw "Release asset is a symlink, junction, or reparse point: $($file.Name)"
+            }
+            if (-not $assetPath.StartsWith($distPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+                [IO.Path]::GetDirectoryName($assetPath) -ne $distPath) {
+              throw "Release asset resolves outside the top level of dist: $assetPath"
+            }
+          }
+
+          $requiredInstallers = @(
+            '*-arm64-portable.exe',
+            '*-arm64-setup.exe',
+            '*-x64-portable.exe',
+            '*-x64-setup.exe'
+          )
+          foreach ($pattern in $requiredInstallers) {
+            $matches = @($files | Where-Object { $_.Name -like $pattern })
+            if ($matches.Count -ne 1) {
+              throw "Expected exactly one '$pattern' installer, found $($matches.Count)."
+            }
+          }
+          $updateMetadata = @($files | Where-Object { $_.Name -like 'latest*.yml' })
+          if ($updateMetadata.Count -lt 1) { throw 'No latest*.yml update metadata was generated.' }
+
+          foreach ($file in $files) {
+            $destination = Join-Path $staging $file.Name
+            Copy-Item -LiteralPath $file.FullName -Destination $destination
+            $stagedFile = Get-Item -LiteralPath $destination -Force
+            if (($stagedFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $stagedFile.LinkType) {
+              throw "Staged asset is a symlink, junction, or reparse point: $($file.Name)"
+            }
+          }
+
+          $stagedFiles = Get-ChildItem -LiteralPath $staging -File | Sort-Object Name
+          $lines = foreach ($file in $stagedFiles) {
             $hash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $($file.Name)"
           }
-          $lines | Set-Content -LiteralPath dist/SHA256SUMS.txt -Encoding utf8NoBOM
-          Get-Content dist/SHA256SUMS.txt
+          $checksumPath = Join-Path $staging 'SHA256SUMS.txt'
+          $utf8NoBom = [Text.UTF8Encoding]::new($false)
+          [IO.File]::WriteAllText($checksumPath, (($lines -join "`n") + "`n"), $utf8NoBom)
 
-      - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
+          $unexpected = Get-ChildItem -LiteralPath $staging -File | Where-Object {
+            $_.Name -ne 'SHA256SUMS.txt' -and
+            $_.Extension -notin @('.exe', '.zip', '.blockmap') -and
+            $_.Name -notlike 'latest*.yml'
+          }
+          if ($unexpected) { throw "Unexpected staged files: $($unexpected.Name -join ', ')" }
+          Get-Content -LiteralPath $checksumPath
+
+      - name: Upload immutable Windows artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: cherry-studio-windows-${{ github.sha }}
-          path: dist/*
+          name: ${{ needs.resolve.outputs.artifact_name }}
+          path: release-staging/*
           if-no-files-found: error
           retention-days: 30
 
-      - name: Resolve release tag
-        id: release
-        shell: pwsh
-        env:
-          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
-        run: |
-          $tag = $env:RELEASE_TAG_INPUT
-          if ([string]::IsNullOrWhiteSpace($tag)) { $tag = 'windows-latest' }
-          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-
-      - name: Move rolling release tag to this build
-        if: steps.release.outputs.tag == 'windows-latest'
-        shell: pwsh
-        run: |
-          git tag --force windows-latest $env:GITHUB_SHA
-          git push origin refs/tags/windows-latest --force
-
-      - name: Publish rolling Windows GitHub Release
-        uses: softprops/action-gh-release@v2
+  immutable_release:
+    name: Publish and verify immutable candidate release
+    needs: [resolve, build]
+    if: needs.resolve.outputs.publish_only != 'true' && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out exact source SHA
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          tag_name: ${{ steps.release.outputs.tag }}
-          target_commitish: ${{ github.sha }}
-          prerelease: true
-          make_latest: false
-          overwrite_files: true
-          # 发布配置关闭时，electron-builder 可能不会生成 blockmap 或 latest*.yml。
-          fail_on_unmatched_files: false
-          files: |
-            dist/*.exe
-            dist/*.zip
-            dist/latest*.yml
-            dist/*.blockmap
-            dist/SHA256SUMS.txt
+          fetch-depth: 0
+          ref: ${{ needs.resolve.outputs.source_sha }}
+
+      - name: Verify checked out source SHA
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Download candidate build artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.resolve.outputs.artifact_name }}
+          path: release-staging
+
+      - name: Verify staged checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          verify_release_directory() {
+            local directory="$1" all_assets="$2" manifest_assets="$3"
+            local entry name line hash separator pattern count latest_count
+            local invalid_entry=false
+            declare -A seen_assets=()
+
+            if [ ! -d "$directory" ] || [ -L "$directory" ]; then
+              echo "::error title=Unsafe release directory::$directory is not a real directory."
+              return 1
+            fi
+            while IFS= read -r -d '' entry; do
+              echo "::error title=Unsafe release entry::$entry is not a regular top-level file."
+              invalid_entry=true
+              break
+            done < <(find "$directory" -mindepth 1 -maxdepth 1 ! -type f -print0)
+            [ "$invalid_entry" = 'false' ] || return 1
+
+            : > "$all_assets" || return 1
+            while IFS= read -r -d '' entry; do
+              name="${entry##*/}"
+              case "$name" in
+                . | .. | */* | *\\* | *[[:cntrl:]]*)
+                  echo "::error title=Unsafe release asset name::$name"
+                  return 1
+                  ;;
+              esac
+              printf '%s\n' "$name" >> "$all_assets" || return 1
+            done < <(find "$directory" -mindepth 1 -maxdepth 1 -type f -print0)
+            LC_ALL=C sort -u -o "$all_assets" "$all_assets" || return 1
+            test -s "$all_assets" || return 1
+            grep -Fxq 'SHA256SUMS.txt' "$all_assets" || return 1
+
+            : > "$manifest_assets" || return 1
+            while IFS= read -r line || [ -n "$line" ]; do
+              if [ "${#line}" -lt 67 ]; then
+                echo '::error title=Malformed checksum manifest::Every line must contain a lowercase SHA256, two spaces, and one filename.'
+                return 1
+              fi
+              hash="${line:0:64}"
+              separator="${line:64:2}"
+              name="${line:66}"
+              if ! [[ "$hash" =~ ^[0-9a-f]{64}$ ]] || [ "$separator" != '  ' ]; then
+                echo "::error title=Malformed checksum manifest::$line"
+                return 1
+              fi
+              case "$name" in
+                '' | . | .. | */* | *\\* | *[[:cntrl:]]*)
+                  echo "::error title=Unsafe manifest asset name::$name"
+                  return 1
+                  ;;
+                *.exe | *.zip | *.blockmap | latest*.yml)
+                  ;;
+                *)
+                  echo "::error title=Manifest asset outside allowlist::$name"
+                  return 1
+                  ;;
+              esac
+              if [ "${seen_assets[$name]+present}" = 'present' ]; then
+                echo "::error title=Duplicate manifest asset::$name"
+                return 1
+              fi
+              seen_assets["$name"]=1
+              printf '%s\n' "$name" >> "$manifest_assets" || return 1
+            done < "$directory/SHA256SUMS.txt" || return 1
+            test -s "$manifest_assets" || return 1
+            LC_ALL=C sort -o "$manifest_assets" "$manifest_assets" || return 1
+
+            awk '$0 != "SHA256SUMS.txt"' "$all_assets" > "$manifest_assets.actual" || return 1
+            diff --unified "$manifest_assets" "$manifest_assets.actual" || return 1
+            for pattern in \
+              '*-arm64-portable.exe' \
+              '*-arm64-setup.exe' \
+              '*-x64-portable.exe' \
+              '*-x64-setup.exe'; do
+              count=0
+              while IFS= read -r name; do
+                # shellcheck disable=SC2053
+                if [[ "$name" == $pattern ]]; then
+                  ((count += 1))
+                fi
+              done < "$manifest_assets" || return 1
+              [ "$count" -eq 1 ] || {
+                echo "::error title=Required installer mismatch::Expected exactly one $pattern asset, found $count."
+                return 1
+              }
+            done
+            latest_count=0
+            while IFS= read -r name; do
+              if [[ "$name" == latest*.yml ]]; then
+                ((latest_count += 1))
+              fi
+            done < "$manifest_assets" || return 1
+            [ "$latest_count" -ge 1 ] || {
+              echo '::error title=Missing update metadata::Expected at least one latest*.yml asset.'
+              return 1
+            }
+            (cd "$directory" && sha256sum --strict --check SHA256SUMS.txt) || return 1
+          }
+
+          verify_release_directory \
+            release-staging \
+            "$RUNNER_TEMP/staged-assets.txt" \
+            "$RUNNER_TEMP/staged-manifest-assets.txt"
+
+          fixture_dir="$RUNNER_TEMP/manifest-coverage-fixture"
+          rm -rf -- "$fixture_dir"
+          mkdir "$fixture_dir"
+          for fixture_asset in \
+            fixture-arm64-portable.exe \
+            fixture-arm64-setup.exe \
+            fixture-x64-portable.exe \
+            fixture-x64-setup.exe \
+            latest-fixture.yml; do
+            printf 'fixture\n' > "$fixture_dir/$fixture_asset"
+          done
+          (
+            cd "$fixture_dir"
+            sha256sum --text \
+              fixture-arm64-portable.exe \
+              fixture-arm64-setup.exe \
+              fixture-x64-portable.exe \
+              fixture-x64-setup.exe \
+              latest-fixture.yml > SHA256SUMS.txt
+            printf 'not listed in SHA256SUMS.txt\n' > unlisted.zip
+          )
+          if verify_release_directory \
+            "$fixture_dir" \
+            "$RUNNER_TEMP/fixture-assets.txt" \
+            "$RUNNER_TEMP/fixture-manifest-assets.txt"; then
+            echo '::error title=Manifest coverage fixture failed::An unlisted release asset was accepted.'
+            exit 1
+          fi
+          rm -rf -- "$fixture_dir"
+
+      - name: Resume draft or verify published immutable release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMMUTABLE_TAG: ${{ needs.resolve.outputs.immutable_tag }}
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+
+          release_query="$RUNNER_TEMP/immutable-release-query.json"
+          expected_assets="$RUNNER_TEMP/immutable-expected-assets.txt"
+          remote_assets="$RUNNER_TEMP/immutable-remote-assets.txt"
+          expected_digests="$RUNNER_TEMP/immutable-expected-digests.txt"
+          remote_digests="$RUNNER_TEMP/immutable-remote-digests.txt"
+          expected_manifest_assets="$RUNNER_TEMP/immutable-expected-manifest-assets.txt"
+
+          verify_release_directory() {
+            local directory="$1" all_assets="$2" manifest_assets="$3"
+            local entry name line hash separator pattern count latest_count
+            local invalid_entry=false
+            declare -A seen_assets=()
+
+            [ -d "$directory" ] && [ ! -L "$directory" ] || return 1
+            while IFS= read -r -d '' entry; do
+              echo "::error title=Unsafe release entry::$entry is not a regular top-level file."
+              invalid_entry=true
+              break
+            done < <(find "$directory" -mindepth 1 -maxdepth 1 ! -type f -print0)
+            [ "$invalid_entry" = 'false' ] || return 1
+            : > "$all_assets" || return 1
+            while IFS= read -r -d '' entry; do
+              name="${entry##*/}"
+              case "$name" in . | .. | */* | *\\* | *[[:cntrl:]]*) return 1 ;; esac
+              printf '%s\n' "$name" >> "$all_assets" || return 1
+            done < <(find "$directory" -mindepth 1 -maxdepth 1 -type f -print0)
+            LC_ALL=C sort -u -o "$all_assets" "$all_assets" || return 1
+            test -s "$all_assets" || return 1
+            grep -Fxq 'SHA256SUMS.txt' "$all_assets" || return 1
+
+            : > "$manifest_assets" || return 1
+            while IFS= read -r line || [ -n "$line" ]; do
+              [ "${#line}" -ge 67 ] || return 1
+              hash="${line:0:64}"
+              separator="${line:64:2}"
+              name="${line:66}"
+              [[ "$hash" =~ ^[0-9a-f]{64}$ ]] && [ "$separator" = '  ' ] || return 1
+              case "$name" in
+                '' | . | .. | */* | *\\* | *[[:cntrl:]]*) return 1 ;;
+                *.exe | *.zip | *.blockmap | latest*.yml) ;;
+                *) return 1 ;;
+              esac
+              [ "${seen_assets[$name]+present}" != 'present' ] || return 1
+              seen_assets["$name"]=1
+              printf '%s\n' "$name" >> "$manifest_assets" || return 1
+            done < "$directory/SHA256SUMS.txt" || return 1
+            test -s "$manifest_assets" || return 1
+            LC_ALL=C sort -o "$manifest_assets" "$manifest_assets" || return 1
+            awk '$0 != "SHA256SUMS.txt"' "$all_assets" > "$manifest_assets.actual" || return 1
+            diff --unified "$manifest_assets" "$manifest_assets.actual" >/dev/null || return 1
+
+            for pattern in \
+              '*-arm64-portable.exe' \
+              '*-arm64-setup.exe' \
+              '*-x64-portable.exe' \
+              '*-x64-setup.exe'; do
+              count=0
+              while IFS= read -r name; do
+                # shellcheck disable=SC2053
+                [[ "$name" == $pattern ]] && ((count += 1)) || true
+              done < "$manifest_assets" || return 1
+              [ "$count" -eq 1 ] || return 1
+            done
+            latest_count=0
+            while IFS= read -r name; do
+              [[ "$name" == latest*.yml ]] && ((latest_count += 1)) || true
+            done < "$manifest_assets" || return 1
+            [ "$latest_count" -ge 1 ] || return 1
+            (cd "$directory" && sha256sum --strict --check SHA256SUMS.txt) || return 1
+          }
+
+          verify_release_directory release-staging "$expected_assets" "$expected_manifest_assets"
+
+          while IFS= read -r asset; do
+            printf '%s\tsha256:%s\n' "$asset" "$(sha256sum "release-staging/$asset" | awk '{print $1}')"
+          done < "$expected_assets" | LC_ALL=C sort > "$expected_digests"
+
+          query_release() {
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              | jq -s --arg tag "$IMMUTABLE_TAG" \
+                '[.[][] | select(.tag_name == $tag)]' > "$release_query"
+          }
+
+          assert_same_draft() {
+            local expected_release_id="$1"
+            query_release
+            if [ "$(jq 'length' "$release_query")" -ne 1 ] || \
+              [ "$(jq -r '.[0].id' "$release_query")" != "$expected_release_id" ] || \
+              [ "$(jq -r '.[0].tag_name' "$release_query")" != "$IMMUTABLE_TAG" ] || \
+              [ "$(jq -r '.[0].draft' "$release_query")" != 'true' ] || \
+              [ "$(jq -r '.[0].prerelease' "$release_query")" != 'true' ] || \
+              [ "$(jq -r '.[0].target_commitish' "$release_query")" != "$SOURCE_SHA" ]; then
+              echo '::error title=Immutable draft changed::Refusing to mutate a missing, replaced, published, or retargeted immutable release.'
+              return 1
+            fi
+          }
+
+          assert_same_published() {
+            local expected_release_id="$1"
+            query_release
+            if [ "$(jq 'length' "$release_query")" -ne 1 ] || \
+              [ "$(jq -r '.[0].id' "$release_query")" != "$expected_release_id" ] || \
+              [ "$(jq -r '.[0].tag_name' "$release_query")" != "$IMMUTABLE_TAG" ] || \
+              [ "$(jq -r '.[0].draft' "$release_query")" != 'false' ] || \
+              [ "$(jq -r '.[0].prerelease' "$release_query")" != 'true' ] || \
+              [ "$(jq -r '.[0].target_commitish' "$release_query")" != "$SOURCE_SHA" ]; then
+              echo '::error title=Immutable release changed::The published immutable release id, tag, state, or target no longer matches the validated source.'
+              return 1
+            fi
+          }
+
+          verify_tag_if_present() {
+            local remote_tag_object verification_ref tag_commit
+            remote_tag_object="$(git ls-remote origin "refs/tags/$IMMUTABLE_TAG" | awk '{print $1}')"
+            [ -z "$remote_tag_object" ] && return 0
+            verification_ref="refs/tags/immutable-preflight-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            git fetch --force --no-tags origin \
+              "refs/tags/$IMMUTABLE_TAG:$verification_ref" >/dev/null
+            tag_commit="$(git rev-parse "$verification_ref^{commit}")"
+            if [ "$tag_commit" != "$SOURCE_SHA" ]; then
+              echo "::error title=Immutable tag collision::$IMMUTABLE_TAG points to $tag_commit."
+              return 1
+            fi
+          }
+
+          assert_immutable_tag_claimed() {
+            local remote_tag_object verification_ref tag_commit
+            remote_tag_object="$(git ls-remote origin "refs/tags/$IMMUTABLE_TAG" | awk '{print $1}')"
+            if [ -z "$remote_tag_object" ]; then
+              echo "::error title=Immutable tag missing::$IMMUTABLE_TAG was not created before release publication."
+              return 1
+            fi
+            verification_ref="refs/tags/immutable-claimed-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            git fetch --force --no-tags origin \
+              "refs/tags/$IMMUTABLE_TAG:$verification_ref" >/dev/null
+            tag_commit="$(git rev-parse "$verification_ref^{commit}")"
+            if [ "$tag_commit" != "$SOURCE_SHA" ]; then
+              echo "::error title=Immutable tag collision::$IMMUTABLE_TAG points to $tag_commit."
+              return 1
+            fi
+          }
+
+          claim_immutable_tag() {
+            local remote_tag_object
+            remote_tag_object="$(git ls-remote origin "refs/tags/$IMMUTABLE_TAG" | awk '{print $1}')"
+            if [ -z "$remote_tag_object" ]; then
+              if ! git push origin "$SOURCE_SHA:refs/tags/$IMMUTABLE_TAG"; then
+                echo 'A tag push error is tolerated only if a follow-up query proves the exact immutable tag exists.'
+              fi
+            fi
+            assert_immutable_tag_claimed
+          }
+
+          verify_remote_assets() {
+            local release_id="$1" attempt
+            for attempt in 1 2 3 4 5; do
+              gh api --paginate \
+                "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" \
+                --jq '.[].name' | LC_ALL=C sort > "$remote_assets"
+              gh api --paginate \
+                "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" \
+                --jq '.[] | [.name, .digest] | @tsv' | LC_ALL=C sort > "$remote_digests"
+              if diff --unified "$expected_assets" "$remote_assets" >/dev/null && \
+                diff --unified "$expected_digests" "$remote_digests" >/dev/null; then
+                return 0
+              fi
+              [ "$attempt" -lt 5 ] && sleep 3
+            done
+            diff --unified "$expected_assets" "$remote_assets" || true
+            diff --unified "$expected_digests" "$remote_digests" || true
+            return 1
+          }
+
+          download_release_assets() {
+            local release_id="$1" destination="$2" asset_manifest asset_list asset_id asset_name
+            asset_manifest="$RUNNER_TEMP/immutable-download-assets.json"
+            rm -rf -- "$destination" || return 1
+            mkdir "$destination" || return 1
+            gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" \
+              | jq -s '[.[][]]' > "$asset_manifest" || return 1
+            jq -e 'length > 0 and all(.[]; (.id | type) == "number" and (.name | type) == "string") and ((map(.name) | length) == (map(.name) | unique | length))' \
+              "$asset_manifest" >/dev/null || return 1
+
+            asset_list="$asset_manifest.tsv"
+            jq -r '.[] | [.id, .name] | @tsv' "$asset_manifest" > "$asset_list" || return 1
+
+            while IFS=$'\t' read -r asset_id asset_name; do
+              [ -n "$asset_id" ] && [ -n "$asset_name" ] || return 1
+              case "$asset_name" in
+                '' | . | .. | */* | *\\* | *[[:cntrl:]]*)
+                  echo "::error title=Unsafe release asset name::$asset_name"
+                  return 1
+                  ;;
+              esac
+              curl --fail --location --silent --show-error \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H 'Accept: application/octet-stream' \
+                -H 'X-GitHub-Api-Version: 2022-11-28' \
+                "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+                --output "$destination/$asset_name" || return 1
+            done < "$asset_list" || return 1
+          }
+
+          upload_draft_asset() {
+            local release_id="$1" file_path="$2" asset_name encoded_name current_assets asset_id
+            asset_name="$(basename "$file_path")"
+            encoded_name="$(jq -nr --arg value "$asset_name" '$value | @uri')"
+            current_assets="$RUNNER_TEMP/immutable-current-assets.json"
+            gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" \
+              | jq -s '[.[][]]' > "$current_assets"
+            while IFS= read -r asset_id; do
+              [ -z "$asset_id" ] && continue
+              assert_same_draft "$release_id"
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+            done < <(jq -r --arg name "$asset_name" '.[] | select(.name == $name) | .id' "$current_assets")
+
+            assert_same_draft "$release_id"
+            curl --fail --silent --show-error \
+              --request POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'Content-Type: application/octet-stream' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              --data-binary "@$file_path" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$release_id/assets?name=$encoded_name" \
+              >/dev/null
+          }
+
+          verify_download() {
+            local release_id="$1" attempt verification_dir downloaded_assets downloaded_manifest_assets downloaded_digests
+            verification_dir="$RUNNER_TEMP/immutable-release-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            downloaded_assets="$RUNNER_TEMP/immutable-downloaded-assets.txt"
+            downloaded_manifest_assets="$RUNNER_TEMP/immutable-downloaded-manifest-assets.txt"
+            downloaded_digests="$RUNNER_TEMP/immutable-downloaded-digests.txt"
+            for attempt in 1 2 3; do
+              if download_release_assets "$release_id" "$verification_dir"; then
+                if verify_release_directory \
+                  "$verification_dir" "$downloaded_assets" "$downloaded_manifest_assets"; then
+                  while IFS= read -r asset; do
+                    printf '%s\tsha256:%s\n' "$asset" \
+                      "$(sha256sum "$verification_dir/$asset" | awk '{print $1}')"
+                  done < "$downloaded_assets" | LC_ALL=C sort > "$downloaded_digests"
+                  if diff --unified "$expected_assets" "$downloaded_assets" >/dev/null && \
+                    diff --unified "$expected_manifest_assets" "$downloaded_manifest_assets" >/dev/null && \
+                    diff --unified "$expected_digests" "$downloaded_digests" >/dev/null; then
+                    return 0
+                  fi
+                fi
+              fi
+              [ "$attempt" -lt 3 ] && sleep 3
+            done
+            echo '::error title=Immutable download verification failed::Downloaded assets or SHA256 checks did not match.'
+            return 1
+          }
+
+          verify_tag_if_present
+          query_release
+          release_count="$(jq 'length' "$release_query")"
+          if [ "$release_count" -gt 1 ]; then
+            echo '::error title=Duplicate immutable releases::More than one release uses the immutable tag.'
+            exit 1
+          fi
+
+          if [ "$release_count" -eq 0 ]; then
+            query_release
+            if [ "$(jq 'length' "$release_query")" -ne 0 ]; then
+              echo '::error title=Immutable release race::The immutable release appeared before draft creation.'
+              exit 1
+            fi
+            release_id="$(
+              gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+                -f tag_name="$IMMUTABLE_TAG" \
+                -f target_commitish="$SOURCE_SHA" \
+                -f name="Windows $SOURCE_SHA" \
+                -F draft=true -F prerelease=true \
+                --jq '.id'
+            )"
+            release_is_draft=true
+            assert_same_draft "$release_id"
+          else
+            release_id="$(jq -r '.[0].id' "$release_query")"
+            release_is_draft="$(jq -r '.[0].draft' "$release_query")"
+            target_commitish="$(jq -r '.[0].target_commitish' "$release_query")"
+            if [ "$target_commitish" != "$SOURCE_SHA" ]; then
+              echo "::error title=Immutable release collision::Release targets $target_commitish instead of $SOURCE_SHA."
+              exit 1
+            fi
+            if [ "$release_is_draft" = 'true' ]; then
+              assert_same_draft "$release_id"
+            elif [ "$release_is_draft" = 'false' ]; then
+              assert_same_published "$release_id"
+              assert_immutable_tag_claimed
+            else
+              echo '::error title=Invalid immutable release state::The draft flag was not a boolean value.'
+              exit 1
+            fi
+          fi
+
+          if [ "$release_is_draft" = 'true' ]; then
+            while IFS= read -r asset; do
+              upload_draft_asset "$release_id" "release-staging/$asset"
+            done < "$expected_assets"
+
+            gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" \
+              --jq '.[] | [.id, .name] | @tsv' \
+              | while IFS=$'\t' read -r asset_id asset_name; do
+                  [ -z "$asset_id" ] && continue
+                  if ! grep -Fxq -- "$asset_name" "$expected_assets"; then
+                    assert_same_draft "$release_id"
+                    gh api --method DELETE \
+                      "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+                  fi
+                done
+          fi
+
+          verify_remote_assets "$release_id"
+          verify_download "$release_id"
+
+          if [ "$release_is_draft" = 'true' ]; then
+            assert_same_draft "$release_id"
+            claim_immutable_tag
+            assert_same_draft "$release_id"
+            assert_immutable_tag_claimed
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+              -F draft=false -F prerelease=true >/dev/null
+          else
+            assert_same_published "$release_id"
+          fi
+
+          published=false
+          for attempt in 1 2 3 4 5; do
+            query_release
+            if [ "$(jq 'length' "$release_query")" -eq 1 ] && \
+              [ "$(jq -r '.[0].id' "$release_query")" = "$release_id" ] && \
+              [ "$(jq -r '.[0].tag_name' "$release_query")" = "$IMMUTABLE_TAG" ] && \
+              [ "$(jq -r '.[0].draft' "$release_query")" = 'false' ] && \
+              [ "$(jq -r '.[0].prerelease' "$release_query")" = 'true' ] && \
+              [ "$(jq -r '.[0].target_commitish' "$release_query")" = "$SOURCE_SHA" ]; then
+              published=true
+              break
+            fi
+            [ "$attempt" -lt 5 ] && sleep 3
+          done
+          if [ "$published" != 'true' ]; then
+            echo '::error title=Immutable publish did not settle::Release remained missing or draft.'
+            exit 1
+          fi
+
+          assert_same_published "$release_id"
+          verification_ref="refs/tags/immutable-verification-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          git fetch --force --no-tags origin \
+            "refs/tags/$IMMUTABLE_TAG:$verification_ref"
+          tag_commit="$(git rev-parse "$verification_ref^{commit}")"
+          [ "$tag_commit" = "$SOURCE_SHA" ]
+          verify_remote_assets "$release_id"
+          verify_download "$release_id"
+          assert_same_published "$release_id"
+
+          {
+            echo '## Immutable candidate release verified'
+            echo
+            echo "Tag: \`$IMMUTABLE_TAG\`"
+            echo "Commit: \`$SOURCE_SHA\`"
+            echo 'A recoverable draft was repaired if needed, verified, and only then published.'
+            echo 'An already-published immutable release was never modified.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  promote:
+    name: Atomically promote candidate
+    needs: [resolve, build, immutable_release]
+    if: >-
+      needs.resolve.outputs.promote_candidate == 'true' &&
+      needs.build.result == 'success' &&
+      needs.immutable_release.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out candidate history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.resolve.outputs.source_sha }}
+
+      - name: Verify checked out candidate SHA
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Update main and upstream-v1 atomically
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          UPSTREAM_SHA: ${{ inputs.upstream_sha }}
+          EXPECTED_MAIN_SHA: ${{ inputs.expected_main_sha }}
+          EXPECTED_UPSTREAM_SHA: ${{ inputs.expected_upstream_sha }}
+        run: |
+          set -euo pipefail
+
+          for value in "$SOURCE_SHA" "$UPSTREAM_SHA" "$EXPECTED_MAIN_SHA"; do
+            if ! [[ "$value" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error title=Invalid promotion input::'$value' is not a full commit SHA."
+              exit 1
+            fi
+          done
+          if [ -n "$EXPECTED_UPSTREAM_SHA" ] && ! [[ "$EXPECTED_UPSTREAM_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error title=Invalid promotion input::Expected upstream SHA is malformed."
+            exit 1
+          fi
+
+          current_main_sha="$(git ls-remote --heads origin refs/heads/main | awk '{print $1}')"
+          current_upstream_sha="$(git ls-remote --heads origin refs/heads/upstream-v1 | awk '{print $1}')"
+          if [ "$current_main_sha" != "$EXPECTED_MAIN_SHA" ] || \
+            [ "$current_upstream_sha" != "$EXPECTED_UPSTREAM_SHA" ]; then
+            {
+              echo '## Promotion rejected'
+              echo
+              echo 'A protected branch moved while the candidate was building.'
+              echo "Expected main: \`$EXPECTED_MAIN_SHA\`"
+              echo "Current main: \`$current_main_sha\`"
+              echo "Expected upstream-v1: \`${EXPECTED_UPSTREAM_SHA:-missing}\`"
+              echo "Current upstream-v1: \`${current_upstream_sha:-missing}\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo '::error title=Stale candidate::Branch tips changed during validation; start a fresh sync.'
+            exit 1
+          fi
+
+          git cat-file -e "$SOURCE_SHA^{commit}"
+          git cat-file -e "$UPSTREAM_SHA^{commit}"
+          git merge-base --is-ancestor "$EXPECTED_MAIN_SHA" "$SOURCE_SHA"
+          git merge-base --is-ancestor "$UPSTREAM_SHA" "$SOURCE_SHA"
+          if [ -n "$EXPECTED_UPSTREAM_SHA" ]; then
+            git cat-file -e "$EXPECTED_UPSTREAM_SHA^{commit}"
+            git merge-base --is-ancestor "$EXPECTED_UPSTREAM_SHA" "$EXPECTED_MAIN_SHA"
+            git merge-base --is-ancestor "$EXPECTED_UPSTREAM_SHA" "$UPSTREAM_SHA"
+          fi
+
+          git push --atomic \
+            --force-with-lease="refs/heads/main:$EXPECTED_MAIN_SHA" \
+            --force-with-lease="refs/heads/upstream-v1:$EXPECTED_UPSTREAM_SHA" \
+            origin \
+            "$SOURCE_SHA:refs/heads/main" \
+            "$UPSTREAM_SHA:refs/heads/upstream-v1"
+
+          verified_main_sha="$(git ls-remote --heads origin refs/heads/main | awk '{print $1}')"
+          verified_upstream_sha="$(git ls-remote --heads origin refs/heads/upstream-v1 | awk '{print $1}')"
+          if [ "$verified_main_sha" != "$SOURCE_SHA" ] || \
+            [ "$verified_upstream_sha" != "$UPSTREAM_SHA" ]; then
+            echo '::error title=Promotion verification failed::main or upstream-v1 did not settle at the candidate SHAs.'
+            exit 1
+          fi
+
+          {
+            echo '## Candidate promoted'
+            echo
+            echo "Main: \`$SOURCE_SHA\`"
+            echo "upstream-v1: \`$UPSTREAM_SHA\`"
+            echo 'Both refs were updated by one atomic push guarded by leases.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish validated Windows release
+    needs: [resolve, immutable_release, promote]
+    if: >-
+      always() &&
+      needs.resolve.result == 'success' &&
+      (
+        needs.resolve.outputs.publish_only == 'true' ||
+        (
+          needs.immutable_release.result == 'success' &&
+          (
+            (needs.resolve.outputs.promote_candidate == 'true' && needs.promote.result == 'success') ||
+            (needs.resolve.outputs.promote_candidate != 'true' && needs.promote.result == 'skipped')
+          )
+        )
+      )
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out exact source SHA
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.resolve.outputs.source_sha }}
+
+      - name: Verify checked out source SHA
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Download authoritative immutable release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMMUTABLE_TAG: ${{ needs.resolve.outputs.immutable_tag }}
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+
+          release_query="$RUNNER_TEMP/authoritative-release.json"
+
+          query_authoritative_release() {
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              | jq -s --arg tag "$IMMUTABLE_TAG" \
+                '[.[][] | select(.tag_name == $tag)]' > "$release_query"
+          }
+
+          query_authoritative_release
+          if [ "$(jq 'length' "$release_query")" -ne 1 ] || \
+            [ "$(jq -r '.[0].tag_name' "$release_query")" != "$IMMUTABLE_TAG" ] || \
+            [ "$(jq -r '.[0].draft' "$release_query")" != 'false' ] || \
+            [ "$(jq -r '.[0].prerelease' "$release_query")" != 'true' ] || \
+            [ "$(jq -r '.[0].target_commitish' "$release_query")" != "$SOURCE_SHA" ]; then
+            echo '::error title=Missing published immutable release::Publish-only requires one published authoritative release.'
+            exit 1
+          fi
+          release_id="$(jq -r '.[0].id' "$release_query")"
+
+          assert_authoritative_release() {
+            local expected_release_id="$1"
+            query_authoritative_release
+            if [ "$(jq 'length' "$release_query")" -ne 1 ] || \
+              [ "$(jq -r '.[0].id' "$release_query")" != "$expected_release_id" ] || \
+              [ "$(jq -r '.[0].tag_name' "$release_query")" != "$IMMUTABLE_TAG" ] || \
+              [ "$(jq -r '.[0].draft' "$release_query")" != 'false' ] || \
+              [ "$(jq -r '.[0].prerelease' "$release_query")" != 'true' ] || \
+              [ "$(jq -r '.[0].target_commitish' "$release_query")" != "$SOURCE_SHA" ]; then
+              echo '::error title=Immutable release identity race::The authoritative release id, tag, state, or target changed during verification.'
+              return 1
+            fi
+          }
+
+          verify_authoritative_tag() {
+            local verification_ref tag_commit
+            verification_ref="refs/tags/authoritative-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            git fetch --force --no-tags origin \
+              "refs/tags/$IMMUTABLE_TAG:$verification_ref" >/dev/null
+            tag_commit="$(git rev-parse "$verification_ref^{commit}")"
+            if [ "$tag_commit" != "$SOURCE_SHA" ]; then
+              echo "::error title=Immutable tag mismatch::$IMMUTABLE_TAG points to $tag_commit."
+              return 1
+            fi
+          }
+
+          assert_authoritative_release "$release_id"
+          verify_authoritative_tag
+
+          local_assets="$RUNNER_TEMP/authoritative-local-assets.txt"
+          manifest_assets="$RUNNER_TEMP/authoritative-manifest-assets.txt"
+          remote_assets="$RUNNER_TEMP/authoritative-remote-assets.txt"
+          local_digests="$RUNNER_TEMP/authoritative-local-digests.txt"
+          remote_digests="$RUNNER_TEMP/authoritative-remote-digests.txt"
+
+          verify_release_directory() {
+            local directory="$1" all_assets="$2" checksum_assets="$3"
+            local entry name line hash separator pattern count latest_count
+            local invalid_entry=false
+            declare -A seen_assets=()
+
+            [ -d "$directory" ] && [ ! -L "$directory" ] || return 1
+            while IFS= read -r -d '' entry; do
+              echo "::error title=Unsafe release entry::$entry is not a regular top-level file."
+              invalid_entry=true
+              break
+            done < <(find "$directory" -mindepth 1 -maxdepth 1 ! -type f -print0)
+            [ "$invalid_entry" = 'false' ] || return 1
+            : > "$all_assets" || return 1
+            while IFS= read -r -d '' entry; do
+              name="${entry##*/}"
+              case "$name" in . | .. | */* | *\\* | *[[:cntrl:]]*) return 1 ;; esac
+              printf '%s\n' "$name" >> "$all_assets" || return 1
+            done < <(find "$directory" -mindepth 1 -maxdepth 1 -type f -print0)
+            LC_ALL=C sort -u -o "$all_assets" "$all_assets" || return 1
+            test -s "$all_assets" || return 1
+            grep -Fxq 'SHA256SUMS.txt' "$all_assets" || return 1
+
+            : > "$checksum_assets" || return 1
+            while IFS= read -r line || [ -n "$line" ]; do
+              [ "${#line}" -ge 67 ] || return 1
+              hash="${line:0:64}"
+              separator="${line:64:2}"
+              name="${line:66}"
+              [[ "$hash" =~ ^[0-9a-f]{64}$ ]] && [ "$separator" = '  ' ] || return 1
+              case "$name" in
+                '' | . | .. | */* | *\\* | *[[:cntrl:]]*) return 1 ;;
+                *.exe | *.zip | *.blockmap | latest*.yml) ;;
+                *) return 1 ;;
+              esac
+              [ "${seen_assets[$name]+present}" != 'present' ] || return 1
+              seen_assets["$name"]=1
+              printf '%s\n' "$name" >> "$checksum_assets" || return 1
+            done < "$directory/SHA256SUMS.txt" || return 1
+            test -s "$checksum_assets" || return 1
+            LC_ALL=C sort -o "$checksum_assets" "$checksum_assets" || return 1
+            awk '$0 != "SHA256SUMS.txt"' "$all_assets" > "$checksum_assets.actual" || return 1
+            diff --unified "$checksum_assets" "$checksum_assets.actual" >/dev/null || return 1
+            for pattern in \
+              '*-arm64-portable.exe' \
+              '*-arm64-setup.exe' \
+              '*-x64-portable.exe' \
+              '*-x64-setup.exe'; do
+              count=0
+              while IFS= read -r name; do
+                # shellcheck disable=SC2053
+                [[ "$name" == $pattern ]] && ((count += 1)) || true
+              done < "$checksum_assets" || return 1
+              [ "$count" -eq 1 ] || return 1
+            done
+            latest_count=0
+            while IFS= read -r name; do
+              [[ "$name" == latest*.yml ]] && ((latest_count += 1)) || true
+            done < "$checksum_assets" || return 1
+            [ "$latest_count" -ge 1 ] || return 1
+            (cd "$directory" && sha256sum --strict --check SHA256SUMS.txt) || return 1
+          }
+
+          download_release_assets() {
+            local destination="$1" asset_manifest asset_list asset_id asset_name
+            asset_manifest="$RUNNER_TEMP/authoritative-download-assets.json"
+            rm -rf -- "$destination" || return 1
+            mkdir "$destination" || return 1
+            gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" \
+              | jq -s '[.[][]]' > "$asset_manifest" || return 1
+            jq -e 'length > 0 and all(.[]; (.id | type) == "number" and (.name | type) == "string") and ((map(.name) | length) == (map(.name) | unique | length))' \
+              "$asset_manifest" >/dev/null || return 1
+            asset_list="$asset_manifest.tsv"
+            jq -r '.[] | [.id, .name] | @tsv' "$asset_manifest" > "$asset_list" || return 1
+            while IFS=$'\t' read -r asset_id asset_name; do
+              case "$asset_name" in
+                '' | . | .. | */* | *\\* | *[[:cntrl:]]*) return 1 ;;
+              esac
+              curl --fail --location --silent --show-error \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H 'Accept: application/octet-stream' \
+                -H 'X-GitHub-Api-Version: 2022-11-28' \
+                "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+                --output "$destination/$asset_name" || return 1
+            done < "$asset_list" || return 1
+          }
+
+          downloaded=false
+          for attempt in 1 2 3; do
+            if download_release_assets release-staging && \
+              verify_release_directory release-staging "$local_assets" "$manifest_assets"; then
+              downloaded=true
+              break
+            fi
+            [ "$attempt" -lt 3 ] && sleep 3
+          done
+          [ "$downloaded" = 'true' ]
+
+          while IFS= read -r asset; do
+            printf '%s\tsha256:%s\n' "$asset" "$(sha256sum "release-staging/$asset" | awk '{print $1}')"
+          done < "$local_assets" | LC_ALL=C sort > "$local_digests"
+
+          immutable_verified=false
+          for attempt in 1 2 3 4 5; do
+            gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" \
+              --jq '.[].name' | LC_ALL=C sort > "$remote_assets"
+            gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" \
+              --jq '.[] | [.name, .digest] | @tsv' | LC_ALL=C sort > "$remote_digests"
+            if diff --unified "$local_assets" "$remote_assets" >/dev/null && \
+              diff --unified "$local_digests" "$remote_digests" >/dev/null; then
+              immutable_verified=true
+              break
+            fi
+            [ "$attempt" -lt 5 ] && sleep 3
+          done
+          if [ "$immutable_verified" != 'true' ]; then
+            echo '::error title=Unhealthy immutable release::Authoritative names or digests did not match downloaded bytes.'
+            exit 1
+          fi
+          assert_authoritative_release "$release_id"
+          verify_authoritative_tag
+
+      - name: Validate and resolve release tag
+        id: rolling_ref
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          UPSTREAM_SHA: ${{ inputs.upstream_sha }}
+          EXPECTED_UPSTREAM_SHA: ${{ inputs.expected_upstream_sha }}
+        run: |
+          set -euo pipefail
+          guarded_upstream_sha="${UPSTREAM_SHA:-$EXPECTED_UPSTREAM_SHA}"
+          if [ -n "$guarded_upstream_sha" ] && \
+            ! [[ "$guarded_upstream_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo '::error title=Invalid upstream guard::Expected upstream SHA is malformed.'
+            exit 1
+          fi
+          verify_upstream_ref() {
+            local expected="$guarded_upstream_sha" current
+            [ -n "$expected" ] || return 0
+            current="$(git ls-remote --heads origin refs/heads/upstream-v1 | awk '{print $1}')"
+            if [ "$current" != "$expected" ]; then
+              echo "::error title=Stale upstream ref::upstream-v1 is $current, expected $expected."
+              return 1
+            fi
+          }
+          previous_tag_object=''
+          if [ "$RELEASE_TAG" = 'windows-latest' ]; then
+            current_main_sha="$(git ls-remote --heads origin refs/heads/main | awk '{print $1}')"
+            if [ "$current_main_sha" != "$SOURCE_SHA" ]; then
+              echo "::error title=Stale rolling build::Current main is $current_main_sha, not $SOURCE_SHA."
+              exit 1
+            fi
+            if [ -z "$guarded_upstream_sha" ]; then
+              guarded_upstream_sha="$(git ls-remote --heads origin refs/heads/upstream-v1 | awk '{print $1}')"
+              if ! [[ "$guarded_upstream_sha" =~ ^[0-9a-f]{40}$ ]]; then
+                echo '::error title=Missing upstream guard::upstream-v1 did not resolve to a full commit SHA.'
+                exit 1
+              fi
+            fi
+            upstream_verification_ref="refs/heads/upstream-verification-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            git fetch --force --no-tags origin \
+              "refs/heads/upstream-v1:$upstream_verification_ref"
+            if [ "$(git rev-parse "$upstream_verification_ref")" != "$guarded_upstream_sha" ] || \
+              ! git merge-base --is-ancestor "$guarded_upstream_sha" "$SOURCE_SHA"; then
+              echo '::error title=Invalid upstream guard::upstream-v1 moved during preflight or is not contained in the rolling source.'
+              exit 1
+            fi
+            verify_upstream_ref
+            previous_tag_object="$(git ls-remote origin refs/tags/windows-latest | awk '{print $1}')"
+            if [ -n "$previous_tag_object" ]; then
+              preflight_tag_ref="refs/tags/rolling-before-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+              git fetch --force --no-tags origin \
+                "refs/tags/windows-latest:$preflight_tag_ref" >/dev/null
+              [ "$(git rev-parse "$preflight_tag_ref")" = "$previous_tag_object" ]
+            fi
+            git push --atomic \
+              --force-with-lease="refs/heads/main:$current_main_sha" \
+              --force-with-lease="refs/tags/windows-latest:$previous_tag_object" \
+              origin \
+              "$SOURCE_SHA:refs/heads/main" \
+              "$SOURCE_SHA:refs/tags/windows-latest"
+
+            verified_main_sha="$(git ls-remote --heads origin refs/heads/main | awk '{print $1}')"
+            verified_tag_object="$(git ls-remote origin refs/tags/windows-latest | awk '{print $1}')"
+            if [ "$verified_main_sha" != "$SOURCE_SHA" ] || \
+              [ "$verified_tag_object" != "$SOURCE_SHA" ] || \
+              ! verify_upstream_ref; then
+              # The release action has not started, so rolling assets are still the old set.
+              if [ "$verified_tag_object" = "$SOURCE_SHA" ]; then
+                if [ -n "$previous_tag_object" ]; then
+                  git push \
+                    --force-with-lease="refs/tags/windows-latest:$SOURCE_SHA" \
+                    origin "$previous_tag_object:refs/tags/windows-latest" || true
+                else
+                  git push \
+                    --force-with-lease="refs/tags/windows-latest:$SOURCE_SHA" \
+                    origin :refs/tags/windows-latest || true
+                fi
+              fi
+              echo '::error title=Rolling ref race::main, upstream-v1, or windows-latest changed during the guarded update; rolling assets were not modified.'
+              exit 1
+            fi
+          else
+            remote_tag_sha="$(git ls-remote origin "refs/tags/$RELEASE_TAG" | awk '{print $1}')"
+            if [ -z "$remote_tag_sha" ]; then
+              git push \
+                --force-with-lease="refs/tags/$RELEASE_TAG:" \
+                origin "$SOURCE_SHA:refs/tags/$RELEASE_TAG"
+            fi
+            verification_ref="refs/tags/custom-preflight-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            git fetch --force --no-tags origin "refs/tags/$RELEASE_TAG:$verification_ref"
+            tag_commit="$(git rev-parse "$verification_ref^{commit}")"
+            if [ "$tag_commit" != "$SOURCE_SHA" ]; then
+              echo "::error title=Release tag collision::$RELEASE_TAG points to $tag_commit."
+              exit 1
+            fi
+          fi
+          echo "guarded_upstream_sha=$guarded_upstream_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Publish and verify release with guarded API mutations
+        id: rolling_release
+        if: steps.rolling_ref.outcome == 'success'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          UPSTREAM_SHA: ${{ steps.rolling_ref.outputs.guarded_upstream_sha }}
+          EXPECTED_UPSTREAM_SHA: ''
+        run: |
+          set -euo pipefail
+
+          report_rolling_failure() {
+            local status=$?
+            trap - EXIT
+            if [ "$status" -ne 0 ]; then
+              if [ "$RELEASE_TAG" = 'windows-latest' ]; then
+                echo '::error title=Rolling transaction incomplete::Assets may have changed; the current tag is not rolled back, the immutable release remains authoritative, and publish_only must repair rolling state.'
+              else
+                echo '::error title=Release transaction incomplete::Assets may have changed; the current tag is not rolled back and the immutable release remains authoritative for a retry.'
+              fi
+            fi
+            exit "$status"
+          }
+          trap report_rolling_failure EXIT
+
+          verify_upstream_ref() {
+            local expected="${UPSTREAM_SHA:-$EXPECTED_UPSTREAM_SHA}" current
+            [ -n "$expected" ] || return 0
+            current="$(git ls-remote --heads origin refs/heads/upstream-v1 | awk '{print $1}')"
+            [ "$current" = "$expected" ] || {
+              echo "::error title=Stale upstream ref::upstream-v1 is $current, expected $expected."
+              return 1
+            }
+          }
+
+          resolve_remote_tag_commit() {
+            local refs direct peeled
+            refs="$(git ls-remote origin \
+              "refs/tags/$RELEASE_TAG" "refs/tags/$RELEASE_TAG^{}")" || return 1
+            direct="$(awk -v ref="refs/tags/$RELEASE_TAG" '$2 == ref { print $1 }' <<< "$refs")"
+            peeled="$(awk -v ref="refs/tags/$RELEASE_TAG^{}" '$2 == ref { print $1 }' <<< "$refs")"
+            [[ "$direct" =~ ^[0-9a-f]{40}$ ]] || return 1
+            if [ -n "$peeled" ]; then
+              [[ "$peeled" =~ ^[0-9a-f]{40}$ ]] || return 1
+              printf '%s\n' "$peeled"
+            else
+              printf '%s\n' "$direct"
+            fi
+          }
+
+          verify_release_target() {
+            local current_tag_commit current_main_sha
+            current_tag_commit="$(resolve_remote_tag_commit)" || {
+              echo "::error title=Missing release tag::$RELEASE_TAG could not be resolved to a commit."
+              return 1
+            }
+            if [ "$current_tag_commit" != "$SOURCE_SHA" ]; then
+              echo "::error title=Release tag race::$RELEASE_TAG resolves to $current_tag_commit, expected $SOURCE_SHA."
+              return 1
+            fi
+            if [ "$RELEASE_TAG" = 'windows-latest' ]; then
+              current_main_sha="$(git ls-remote --heads origin refs/heads/main | awk '{print $1}')"
+              if [ "$current_main_sha" != "$SOURCE_SHA" ]; then
+                echo "::error title=Rolling main race::main is $current_main_sha, expected $SOURCE_SHA."
+                return 1
+              fi
+              verify_upstream_ref || return 1
+            fi
+          }
+
+          expected_assets="$RUNNER_TEMP/expected-assets.txt"
+          expected_manifest_assets="$RUNNER_TEMP/expected-manifest-assets.txt"
+          remote_assets="$RUNNER_TEMP/remote-assets.txt"
+          expected_digests="$RUNNER_TEMP/expected-digests.txt"
+          remote_digests="$RUNNER_TEMP/remote-digests.txt"
+
+          verify_release_directory() {
+            local directory="$1" all_assets="$2" checksum_assets="$3"
+            local entry name line hash separator pattern count latest_count
+            local invalid_entry=false
+            declare -A seen_assets=()
+
+            [ -d "$directory" ] && [ ! -L "$directory" ] || return 1
+            while IFS= read -r -d '' entry; do
+              echo "::error title=Unsafe release entry::$entry is not a regular top-level file."
+              invalid_entry=true
+              break
+            done < <(find "$directory" -mindepth 1 -maxdepth 1 ! -type f -print0)
+            [ "$invalid_entry" = 'false' ] || return 1
+            : > "$all_assets" || return 1
+            while IFS= read -r -d '' entry; do
+              name="${entry##*/}"
+              case "$name" in . | .. | */* | *\\* | *[[:cntrl:]]*) return 1 ;; esac
+              printf '%s\n' "$name" >> "$all_assets" || return 1
+            done < <(find "$directory" -mindepth 1 -maxdepth 1 -type f -print0)
+            LC_ALL=C sort -u -o "$all_assets" "$all_assets" || return 1
+            test -s "$all_assets" || return 1
+            grep -Fxq 'SHA256SUMS.txt' "$all_assets" || return 1
+            : > "$checksum_assets" || return 1
+            while IFS= read -r line || [ -n "$line" ]; do
+              [ "${#line}" -ge 67 ] || return 1
+              hash="${line:0:64}"
+              separator="${line:64:2}"
+              name="${line:66}"
+              [[ "$hash" =~ ^[0-9a-f]{64}$ ]] && [ "$separator" = '  ' ] || return 1
+              case "$name" in
+                '' | . | .. | */* | *\\* | *[[:cntrl:]]*) return 1 ;;
+                *.exe | *.zip | *.blockmap | latest*.yml) ;;
+                *) return 1 ;;
+              esac
+              [ "${seen_assets[$name]+present}" != 'present' ] || return 1
+              seen_assets["$name"]=1
+              printf '%s\n' "$name" >> "$checksum_assets" || return 1
+            done < "$directory/SHA256SUMS.txt" || return 1
+            test -s "$checksum_assets" || return 1
+            LC_ALL=C sort -o "$checksum_assets" "$checksum_assets" || return 1
+            awk '$0 != "SHA256SUMS.txt"' "$all_assets" > "$checksum_assets.actual" || return 1
+            diff --unified "$checksum_assets" "$checksum_assets.actual" >/dev/null || return 1
+            for pattern in \
+              '*-arm64-portable.exe' \
+              '*-arm64-setup.exe' \
+              '*-x64-portable.exe' \
+              '*-x64-setup.exe'; do
+              count=0
+              while IFS= read -r name; do
+                # shellcheck disable=SC2053
+                [[ "$name" == $pattern ]] && ((count += 1)) || true
+              done < "$checksum_assets" || return 1
+              [ "$count" -eq 1 ] || return 1
+            done
+            latest_count=0
+            while IFS= read -r name; do
+              [[ "$name" == latest*.yml ]] && ((latest_count += 1)) || true
+            done < "$checksum_assets" || return 1
+            [ "$latest_count" -ge 1 ] || return 1
+            (cd "$directory" && sha256sum --strict --check SHA256SUMS.txt) || return 1
+          }
+
+          verify_release_directory release-staging "$expected_assets" "$expected_manifest_assets"
+          while IFS= read -r asset; do
+            printf '%s\tsha256:%s\n' "$asset" \
+              "$(sha256sum "release-staging/$asset" | awk '{print $1}')"
+          done < "$expected_assets" | LC_ALL=C sort > "$expected_digests"
+          verify_release_target
+
+          release_query="$RUNNER_TEMP/rolling-release-query.json"
+          release_snapshot="$RUNNER_TEMP/rolling-release-guard.json"
+
+          query_release() {
+            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              | jq -s --arg tag "$RELEASE_TAG" \
+                '[.[][] | select(.tag_name == $tag)]' > "$release_query" || return 1
+          }
+
+          assert_same_published_release_identity() {
+            local expected_release_id="$1"
+            verify_release_target || return 1
+            gh api "repos/$GITHUB_REPOSITORY/releases/$expected_release_id" \
+              > "$release_snapshot" || return 1
+            jq -e \
+              --arg tag "$RELEASE_TAG" \
+              --argjson release_id "$expected_release_id" \
+              '.id == $release_id and .tag_name == $tag and .draft == false' \
+              "$release_snapshot" >/dev/null || {
+                echo '::error title=Release identity race::The selected release was removed, replaced, retagged, or made draft.'
+                return 1
+              }
+          }
+
+          assert_same_published_release() {
+            local expected_release_id="$1"
+            assert_same_published_release_identity "$expected_release_id" || return 1
+            verify_published_release_snapshot \
+              "$release_snapshot" "$expected_release_id" "$RELEASE_TAG" "$SOURCE_SHA" || {
+                echo '::error title=Release target race::The published release target or prerelease state changed.'
+                return 1
+              }
+          }
+
+          verify_published_release_snapshot() {
+            local snapshot="$1" expected_release_id="$2" expected_tag="$3" expected_source_sha="$4"
+            jq -e \
+              --argjson release_id "$expected_release_id" \
+              --arg tag "$expected_tag" \
+              --arg source_sha "$expected_source_sha" \
+              '.id == $release_id and
+               .tag_name == $tag and
+               .draft == false and
+               .prerelease == true and
+               .target_commitish == $source_sha' \
+              "$snapshot" >/dev/null
+          }
+
+          guard_fixture="$RUNNER_TEMP/published-release-guard-fixture.json"
+          jq -n \
+            --arg tag "$RELEASE_TAG" \
+            --arg source_sha "$SOURCE_SHA" \
+            '{id: 1, tag_name: $tag, draft: false, prerelease: true, target_commitish: $source_sha}' \
+            > "$guard_fixture"
+          verify_published_release_snapshot "$guard_fixture" 1 "$RELEASE_TAG" "$SOURCE_SHA"
+          jq '.target_commitish = "0000000000000000000000000000000000000000"' \
+            "$guard_fixture" > "$guard_fixture.drifted"
+          if verify_published_release_snapshot \
+            "$guard_fixture.drifted" 1 "$RELEASE_TAG" "$SOURCE_SHA"; then
+            echo '::error title=Release guard fixture failed::A drifted published release target was accepted.'
+            exit 1
+          fi
+
+          assert_release_absent_for_creation() {
+            verify_release_target || return 1
+            query_release || return 1
+            [ "$(jq 'length' "$release_query")" -eq 0 ] || {
+              echo '::error title=Release creation race::The release appeared before guarded creation.'
+              return 1
+            }
+          }
+
+          list_release_assets() {
+            local expected_release_id="$1" destination="$2"
+            gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/releases/$expected_release_id/assets?per_page=100" \
+              | jq -s '[.[][]]' > "$destination" || return 1
+            jq -e \
+              'all(.[]; (.id | type) == "number" and (.name | type) == "string") and
+               ((map(.id) | length) == (map(.id) | unique | length)) and
+               ((map(.name) | length) == (map(.name) | unique | length))' \
+              "$destination" >/dev/null || return 1
+          }
+
+          assert_release_asset_target() {
+            local expected_release_id="$1" asset_id="$2" asset_name="$3"
+            local current_assets="$RUNNER_TEMP/rolling-assets-guard.json"
+            list_release_assets "$expected_release_id" "$current_assets" || return 1
+            jq -e \
+              --argjson asset_id "$asset_id" \
+              --arg asset_name "$asset_name" \
+              '[.[] | select(.id == $asset_id and .name == $asset_name)] | length == 1' \
+              "$current_assets" >/dev/null || {
+                echo "::error title=Release asset race::$asset_name no longer identifies the selected asset."
+                return 1
+              }
+          }
+
+          assert_release_asset_absent() {
+            local expected_release_id="$1" asset_name="$2"
+            local current_assets="$RUNNER_TEMP/rolling-assets-guard.json"
+            list_release_assets "$expected_release_id" "$current_assets" || return 1
+            jq -e --arg asset_name "$asset_name" \
+              '[.[] | select(.name == $asset_name)] | length == 0' \
+              "$current_assets" >/dev/null || {
+                echo "::error title=Release asset race::$asset_name appeared before upload."
+                return 1
+              }
+          }
+
+          upload_release_asset() {
+            local expected_release_id="$1" file_path="$2"
+            local asset_name encoded_name current_assets replacement_assets asset_id existing_name
+            asset_name="$(basename "$file_path")" || return 1
+            encoded_name="$(jq -nr --arg value "$asset_name" '$value | @uri')" || return 1
+            current_assets="$RUNNER_TEMP/rolling-current-assets.json"
+            replacement_assets="$RUNNER_TEMP/rolling-replacement-assets.tsv"
+            list_release_assets "$expected_release_id" "$current_assets" || return 1
+            jq -r --arg asset_name "$asset_name" \
+              '.[] | select(.name == $asset_name) | [.id, .name] | @tsv' \
+              "$current_assets" > "$replacement_assets" || return 1
+            while IFS=$'\t' read -r asset_id existing_name; do
+              [ -n "$asset_id" ] && [ "$existing_name" = "$asset_name" ] || return 1
+              assert_same_published_release "$expected_release_id" || return 1
+              assert_release_asset_target \
+                "$expected_release_id" "$asset_id" "$asset_name" || return 1
+              gh api --method DELETE \
+                "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" || return 1
+            done < "$replacement_assets" || return 1
+
+            assert_same_published_release "$expected_release_id" || return 1
+            assert_release_asset_absent "$expected_release_id" "$asset_name" || return 1
+            curl --fail --silent --show-error \
+              --request POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'Content-Type: application/octet-stream' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              --data-binary "@$file_path" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$expected_release_id/assets?name=$encoded_name" \
+              >/dev/null || return 1
+          }
+
+          query_release
+          release_count="$(jq 'length' "$release_query")"
+          if [ "$release_count" -gt 1 ]; then
+            echo '::error title=Duplicate releases::More than one release uses the requested tag.'
+            exit 1
+          fi
+          if [ "$release_count" -eq 0 ]; then
+            assert_release_absent_for_creation
+            release_id="$(
+              gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+                -f tag_name="$RELEASE_TAG" \
+                -f target_commitish="$SOURCE_SHA" \
+                -f name="Windows $RELEASE_TAG" \
+                -F draft=false -F prerelease=true \
+                -f make_latest=false \
+                --jq '.id'
+            )"
+          else
+            release_id="$(jq -r '.[0].id' "$release_query")"
+          fi
+          [[ "$release_id" =~ ^[0-9]+$ ]] || {
+            echo '::error title=Invalid release identity::GitHub did not return a numeric release ID.'
+            exit 1
+          }
+
+          assert_same_published_release_identity "$release_id"
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            -f target_commitish="$SOURCE_SHA" \
+            -F prerelease=true \
+            -f make_latest=false >/dev/null
+          assert_same_published_release "$release_id"
+
+          publication_assets="$RUNNER_TEMP/rolling-publication-assets.txt"
+          awk '$0 != "SHA256SUMS.txt" && $0 !~ /^latest.*\.yml$/' \
+            "$expected_assets" > "$publication_assets"
+          awk '$0 ~ /^latest.*\.yml$/' "$expected_assets" >> "$publication_assets"
+          printf '%s\n' 'SHA256SUMS.txt' >> "$publication_assets"
+          diff --unified "$expected_assets" \
+            <(LC_ALL=C sort "$publication_assets") >/dev/null
+          while IFS= read -r asset; do
+            upload_release_asset "$release_id" "release-staging/$asset"
+          done < "$publication_assets"
+
+          assert_same_published_release "$release_id"
+          remote_asset_manifest="$RUNNER_TEMP/rolling-assets.json"
+          stale_assets="$RUNNER_TEMP/rolling-stale-assets.tsv"
+          list_release_assets "$release_id" "$remote_asset_manifest"
+          jq -r '.[] | [.id, .name] | @tsv' \
+            "$remote_asset_manifest" > "$stale_assets"
+          while IFS=$'\t' read -r stale_asset_id stale_asset; do
+            if [ -z "$stale_asset_id" ] || [ -z "$stale_asset" ]; then
+              echo '::error title=Invalid release asset::The release asset list contained an empty ID or name.'
+              exit 1
+            fi
+            case "$stale_asset" in
+              . | .. | */* | *\\* | *[[:cntrl:]]*)
+                echo "::error title=Unsafe rolling asset name::$stale_asset"
+                exit 1
+                ;;
+            esac
+            if ! grep -Fxq -- "$stale_asset" "$expected_assets"; then
+              assert_same_published_release "$release_id"
+              assert_release_asset_target "$release_id" "$stale_asset_id" "$stale_asset"
+              gh api --method DELETE \
+                "repos/$GITHUB_REPOSITORY/releases/assets/$stale_asset_id"
+            fi
+          done < "$stale_assets"
+
+          assert_same_published_release "$release_id"
+
+          remote_verified=false
+          for attempt in 1 2 3 4 5; do
+            gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" \
+              --jq '.[].name' | LC_ALL=C sort > "$remote_assets"
+            gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" \
+              --jq '.[] | [.name, .digest] | @tsv' | LC_ALL=C sort > "$remote_digests"
+            if diff --unified "$expected_assets" "$remote_assets" >/dev/null && \
+              diff --unified "$expected_digests" "$remote_digests" >/dev/null; then
+              remote_verified=true
+              break
+            fi
+            [ "$attempt" -lt 5 ] && sleep 3
+          done
+          if [ "$remote_verified" != 'true' ]; then
+            diff --unified "$expected_assets" "$remote_assets" || true
+            diff --unified "$expected_digests" "$remote_digests" || true
+            echo '::error title=Rolling asset verification failed::The current tag is retained; repair from the immutable release with publish_only.'
+            exit 1
+          fi
+          assert_same_published_release "$release_id"
+
+          if [ "$RELEASE_TAG" = 'windows-latest' ]; then
+            final_main_sha="$(git ls-remote --heads origin refs/heads/main | awk '{print $1}')"
+            final_tag_object="$(git ls-remote origin refs/tags/windows-latest | awk '{print $1}')"
+            verify_upstream_ref
+            if [ "$final_main_sha" != "$SOURCE_SHA" ] || \
+              [ "$final_tag_object" != "$SOURCE_SHA" ]; then
+              echo '::error title=Rolling publication race::Main or windows-latest moved while assets were being published.'
+              exit 1
+            fi
+          fi
+          assert_same_published_release "$release_id"
+
+          verification_tag="refs/tags/release-verification-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          git fetch --force --no-tags origin \
+            "refs/tags/$RELEASE_TAG:$verification_tag"
+          tag_commit="$(git rev-parse "$verification_tag^{commit}")"
+          if [ "$tag_commit" != "$SOURCE_SHA" ]; then
+            echo "::error title=Release tag mismatch::$RELEASE_TAG points to $tag_commit, expected $SOURCE_SHA."
+            exit 1
+          fi
+
+          verification_dir="$RUNNER_TEMP/release-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          downloaded_assets="$RUNNER_TEMP/downloaded-assets.txt"
+          downloaded_manifest_assets="$RUNNER_TEMP/downloaded-manifest-assets.txt"
+          downloaded_digests="$RUNNER_TEMP/downloaded-digests.txt"
+          rm -rf -- "$verification_dir"
+          mkdir "$verification_dir"
+          assert_same_published_release "$release_id"
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/releases/$release_id/assets?per_page=100" \
+            | jq -s '[.[][]]' > "$remote_asset_manifest"
+          jq -e 'length > 0 and all(.[]; (.id | type) == "number" and (.name | type) == "string") and ((map(.name) | length) == (map(.name) | unique | length))' \
+            "$remote_asset_manifest" >/dev/null
+          while IFS=$'\t' read -r asset_id asset_name; do
+            case "$asset_name" in
+              '' | . | .. | */* | *\\* | *[[:cntrl:]]*)
+                echo "::error title=Unsafe release asset name::$asset_name"
+                exit 1
+                ;;
+            esac
+            curl --fail --location --silent --show-error \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/octet-stream' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              --output "$verification_dir/$asset_name"
+          done < <(jq -r '.[] | [.id, .name] | @tsv' "$remote_asset_manifest")
+          verify_release_directory \
+            "$verification_dir" "$downloaded_assets" "$downloaded_manifest_assets"
+          diff --unified "$expected_assets" "$downloaded_assets"
+          diff --unified "$expected_manifest_assets" "$downloaded_manifest_assets"
+          while IFS= read -r asset; do
+            printf '%s\tsha256:%s\n' "$asset" \
+              "$(sha256sum "$verification_dir/$asset" | awk '{print $1}')"
+          done < "$downloaded_assets" | LC_ALL=C sort > "$downloaded_digests"
+          diff --unified "$expected_digests" "$downloaded_digests"
+          assert_same_published_release "$release_id"
+
+          if [ "$RELEASE_TAG" = 'windows-latest' ]; then
+            settled_main_sha="$(git ls-remote --heads origin refs/heads/main | awk '{print $1}')"
+            settled_tag_object="$(git ls-remote origin refs/tags/windows-latest | awk '{print $1}')"
+            verify_upstream_ref
+            if [ "$settled_main_sha" != "$SOURCE_SHA" ] || \
+              [ "$settled_tag_object" != "$SOURCE_SHA" ]; then
+              echo '::error title=Rolling verification race::Main or windows-latest moved before final verification completed.'
+              exit 1
+            fi
+          fi
+          assert_same_published_release "$release_id"
+          {
+            echo '## Remote release verified'
+            echo
+            echo "Tag: \`$RELEASE_TAG\`"
+            echo "Commit: \`$SOURCE_SHA\`"
+            echo 'The remote asset set exactly matches the allowlist and all SHA256 checks passed.'
+          } >> "$GITHUB_STEP_SUMMARY"
+          trap - EXIT
+
+  cleanup:
+    name: Remove promoted candidate ref
+    needs: [resolve, promote, publish]
+    if: >-
+      always() &&
+      needs.promote.result == 'success' &&
+      needs.publish.result == 'success' &&
+      needs.resolve.outputs.candidate_ref != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out promoted source for lease-guarded cleanup
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          ref: ${{ needs.resolve.outputs.source_sha }}
+
+      - name: Delete temporary candidate branch
+        shell: bash
+        env:
+          CANDIDATE_REF: ${{ needs.resolve.outputs.candidate_ref }}
+          EXPECTED_SHA: ${{ needs.resolve.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          git push \
+            --force-with-lease="refs/heads/$CANDIDATE_REF:$EXPECTED_SHA" \
+            origin ":refs/heads/$CANDIDATE_REF"
+
+  report:
+    name: Report build transaction
+    needs: [resolve, build, immutable_release, promote, publish, cleanup]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write transaction summary
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+          CANDIDATE_REF: ${{ needs.resolve.outputs.candidate_ref }}
+          PROMOTION_REQUESTED: ${{ needs.resolve.outputs.promote_candidate }}
+          PUBLISH_ONLY: ${{ needs.resolve.outputs.publish_only }}
+          RESOLVE_RESULT: ${{ needs.resolve.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          IMMUTABLE_RELEASE_RESULT: ${{ needs.immutable_release.result }}
+          PROMOTE_RESULT: ${{ needs.promote.result }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          CLEANUP_RESULT: ${{ needs.cleanup.result }}
+        run: |
+          set -euo pipefail
+          failed=false
+          {
+            echo '## Windows build transaction'
+            echo
+            [ -n "$SOURCE_SHA" ] && echo "Source: \`$SOURCE_SHA\`"
+            echo "Resolve: \`$RESOLVE_RESULT\`"
+            echo "Build: \`$BUILD_RESULT\`"
+            echo "Immutable release: \`$IMMUTABLE_RELEASE_RESULT\`"
+            echo "Promotion: \`$PROMOTE_RESULT\`"
+            echo "Publish: \`$PUBLISH_RESULT\`"
+            echo "Cleanup: \`$CLEANUP_RESULT\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$RESOLVE_RESULT" != 'success' ]; then
+            echo '::error title=Input resolution failed::No build or publication was attempted.'
+            failed=true
+          elif [ "$PUBLISH_ONLY" = 'true' ] && [ "$PUBLISH_RESULT" != 'success' ]; then
+            echo '::error title=Rolling release repair failed::The published immutable release remains authoritative.'
+            failed=true
+          elif [ "$PUBLISH_ONLY" != 'true' ] && [ "$BUILD_RESULT" != 'success' ]; then
+            echo '::error title=Candidate validation failed::The protected refs and rolling release were not updated.'
+            failed=true
+          elif [ "$PUBLISH_ONLY" != 'true' ] && [ "$IMMUTABLE_RELEASE_RESULT" != 'success' ]; then
+            echo '::error title=Immutable release verification failed::The protected refs were not promoted.'
+            failed=true
+          elif [ "$PROMOTION_REQUESTED" = 'true' ] && [ "$PROMOTE_RESULT" != 'success' ]; then
+            echo '::error title=Candidate promotion failed::The candidate was built but the atomic branch update was rejected.'
+            failed=true
+          elif [ "$PUBLISH_RESULT" != 'success' ]; then
+            echo '::error title=Rolling release publication failed::The immutable candidate release remains authoritative for retry.'
+            failed=true
+          fi
+
+          if [ -n "$CANDIDATE_REF" ] && [ "$CLEANUP_RESULT" != 'success' ]; then
+            echo "Diagnostic candidate ref retained: \`$CANDIDATE_REF\`." >> "$GITHUB_STEP_SUMMARY"
+            if [ "$PUBLISH_RESULT" = 'success' ]; then
+              echo '::error title=Candidate cleanup failed::The validated candidate ref was retained.'
+              failed=true
+            fi
+          fi
+          [ "$failed" = 'false' ]

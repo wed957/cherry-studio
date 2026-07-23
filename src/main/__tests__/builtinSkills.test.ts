@@ -70,8 +70,8 @@ vi.mock('../utils/markdownParser', () => ({
   findAllSkillDirectories: vi.fn()
 }))
 
-const resourceSkillsPath = '/app/resources/skills'
-const globalSkillsPath = '/userData/Data/Skills'
+const resourceSkillsPath = path.join('/app', 'resources', 'skills')
+const globalSkillsPath = path.join('/userData/Data', 'Skills')
 
 beforeEach(() => {
   vi.clearAllMocks()

@@ -36,7 +36,7 @@ interface Props {
 
 const AssistantModelSettings: FC<Props> = ({ assistant, updateAssistant, updateAssistantSettings }) => {
   const [temperature, setTemperature] = useState(assistant?.settings?.temperature ?? DEFAULT_TEMPERATURE)
-  const [contextCount, setContextCount] = useState(assistant?.settings?.contextCount ?? DEFAULT_CONTEXTCOUNT)
+  const [contextCount, setContextCount] = useState<number>(assistant?.settings?.contextCount ?? DEFAULT_CONTEXTCOUNT)
   const contextCountSliderValue = Math.min(sanitizeContextCount(contextCount), MAX_CONTEXT_COUNT)
   const enableMaxTokens = useMemo(
     () => assistant?.settings?.enableMaxTokens ?? DEFAULT_ASSISTANT_SETTINGS.enableMaxTokens,

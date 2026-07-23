@@ -29,10 +29,17 @@ const mockedStat = vi.mocked(stat)
 const mockedReadFile = vi.mocked(readFile)
 const mockedReaddir = vi.mocked(readdir)
 
+function normalizeTestPath(filePath: string): string {
+  return filePath.replaceAll('\\', '/')
+}
+
 function setupFiles(files: Record<string, string>) {
+  const normalizedFiles = Object.fromEntries(
+    Object.entries(files).map(([filePath, content]) => [normalizeTestPath(filePath), content])
+  )
   // Build directory listing from file paths
   const dirs = new Map<string, string[]>()
-  for (const filePath of Object.keys(files)) {
+  for (const filePath of Object.keys(normalizedFiles)) {
     const dir = filePath.substring(0, filePath.lastIndexOf('/'))
     const name = filePath.substring(filePath.lastIndexOf('/') + 1)
     if (!dirs.has(dir)) dirs.set(dir, [])
@@ -40,21 +47,21 @@ function setupFiles(files: Record<string, string>) {
   }
 
   mockedStat.mockImplementation(async (filePath) => {
-    const p = typeof filePath === 'string' ? filePath : filePath.toString()
-    if (files[p] !== undefined) {
+    const p = normalizeTestPath(typeof filePath === 'string' ? filePath : filePath.toString())
+    if (normalizedFiles[p] !== undefined) {
       return { mtimeMs: 1000 } as any
     }
     throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
   })
   mockedReadFile.mockImplementation(async (filePath) => {
-    const p = typeof filePath === 'string' ? filePath : filePath.toString()
-    if (files[p] !== undefined) {
-      return files[p]
+    const p = normalizeTestPath(typeof filePath === 'string' ? filePath : filePath.toString())
+    if (normalizedFiles[p] !== undefined) {
+      return normalizedFiles[p]
     }
     throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
   })
   mockedReaddir.mockImplementation(async (dirPath) => {
-    const p = typeof dirPath === 'string' ? dirPath : dirPath.toString()
+    const p = normalizeTestPath(typeof dirPath === 'string' ? dirPath : dirPath.toString())
     return (dirs.get(p) ?? []) as any
   })
 }

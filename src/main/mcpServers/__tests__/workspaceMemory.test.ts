@@ -1,3 +1,5 @@
+import path from 'node:path'
+
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mockGetAgent = vi.fn()
@@ -52,6 +54,7 @@ async function listTools(server: WorkspaceMemoryServerInstance) {
 
 describe('WorkspaceMemoryServer', () => {
   const agentWithWorkspace = { accessible_paths: ['/workspace/test'] }
+  const memoryDirectory = path.join('/workspace/test', 'memory')
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -76,7 +79,7 @@ describe('WorkspaceMemoryServer', () => {
       const server = createServer('agent_1')
       const result = await callTool(server, { action: 'update', content: '# Facts\n\nNew knowledge' })
 
-      expect(mockMkdir).toHaveBeenCalledWith('/workspace/test/memory', { recursive: true })
+      expect(mockMkdir).toHaveBeenCalledWith(memoryDirectory, { recursive: true })
       expect(mockWriteFile).toHaveBeenCalledWith(
         expect.stringContaining('FACT.md.'),
         '# Facts\n\nNew knowledge',
@@ -105,7 +108,7 @@ describe('WorkspaceMemoryServer', () => {
       })
 
       expect(mockAppendFile).toHaveBeenCalledWith(
-        '/workspace/test/memory/JOURNAL.jsonl',
+        path.join(memoryDirectory, 'JOURNAL.jsonl'),
         expect.stringContaining('"text":"Deployed v2.0"'),
         'utf-8'
       )
