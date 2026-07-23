@@ -609,7 +609,11 @@ jobs:
           assert_same_draft() {
             local expected_release_id="$1"
             # Prefer release-by-id: the list endpoint can lag right after draft creation.
-            if ! gh api "repos/$GITHUB_REPOSITORY/releases/$expected_release_id" > "$release_query.id.json" ||               ! jq -e --argjson id "$expected_release_id" --arg tag "$IMMUTABLE_TAG" --arg sha "$SOURCE_SHA"                 '(.id == $id) and (.tag_name == $tag) and (.draft == true) and (.prerelease == true) and (.target_commitish == $sha)'                 "$release_query.id.json" >/dev/null; then
+            if ! gh api "repos/$GITHUB_REPOSITORY/releases/$expected_release_id" > "$release_query.id.json"; then
+              echo '::error title=Immutable draft changed::Refusing to mutate a missing, replaced, published, or retargeted immutable release.'
+              return 1
+            fi
+            if ! jq -e --argjson id "$expected_release_id" --arg tag "$IMMUTABLE_TAG" --arg sha "$SOURCE_SHA"               '(.id == $id) and (.tag_name == $tag) and (.draft == true) and (.prerelease == true) and (.target_commitish == $sha)'               "$release_query.id.json" >/dev/null; then
               echo '::error title=Immutable draft changed::Refusing to mutate a missing, replaced, published, or retargeted immutable release.'
               return 1
             fi
@@ -617,13 +621,17 @@ jobs:
 
           assert_same_published() {
             local expected_release_id="$1"
-            if ! gh api "repos/$GITHUB_REPOSITORY/releases/$expected_release_id" > "$release_query.id.json" ||               ! jq -e --argjson id "$expected_release_id" --arg tag "$IMMUTABLE_TAG" --arg sha "$SOURCE_SHA"                 '(.id == $id) and (.tag_name == $tag) and (.draft == false) and (.prerelease == true) and (.target_commitish == $sha)'                 "$release_query.id.json" >/dev/null; then
+            if ! gh api "repos/$GITHUB_REPOSITORY/releases/$expected_release_id" > "$release_query.id.json"; then
+              echo '::error title=Immutable release changed::The published immutable release id, tag, state, or target no longer matches the validated source.'
+              return 1
+            fi
+            if ! jq -e --argjson id "$expected_release_id" --arg tag "$IMMUTABLE_TAG" --arg sha "$SOURCE_SHA"               '(.id == $id) and (.tag_name == $tag) and (.draft == false) and (.prerelease == true) and (.target_commitish == $sha)'               "$release_query.id.json" >/dev/null; then
               echo '::error title=Immutable release changed::The published immutable release id, tag, state, or target no longer matches the validated source.'
               return 1
             fi
           }
 
-          verify_tag_if_present() {verify_tag_if_present() {
+          verify_tag_if_present() {
             local remote_tag_object verification_ref tag_commit
             remote_tag_object="$(git ls-remote origin "refs/tags/$IMMUTABLE_TAG" | awk '{print $1}')"
             [ -z "$remote_tag_object" ] && return 0
