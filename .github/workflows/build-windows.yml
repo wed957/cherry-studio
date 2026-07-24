@@ -96,9 +96,9 @@ jobs:
             exit 1
           fi
           repo_json="$(gh api "repos/$GITHUB_REPOSITORY")"
-          if ! jq -e '(.private == true) and (.fork == false) and (.parent == null) and (.source == null)' \
+          if ! jq -e '(.fork == false) and (.parent == null) and (.source == null)' \
             <<<"$repo_json" >/dev/null; then
-            echo '::error title=Repository safety preflight failed::Windows publication requires a private standalone repository, not a fork.'
+            echo '::error title=Repository safety preflight failed::Windows publication requires a standalone repository (not a fork).'
             exit 1
           fi
 
@@ -347,7 +347,7 @@ jobs:
           name: ${{ needs.resolve.outputs.artifact_name }}
           path: release-staging/*
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 3
 
   immutable_release:
     name: Publish and verify immutable candidate release

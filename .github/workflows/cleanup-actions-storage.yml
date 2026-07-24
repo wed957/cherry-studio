@@ -1,0 +1,117 @@
+name: Cleanup Actions Storage
+
+# Auto-reclaim GitHub Actions storage (artifacts + caches) for free-tier accounts.
+on:
+  schedule:
+    # Daily artifact cleanup (03:27 UTC)
+    - cron: "27 3 * * *"
+    # Weekly full cache wipe (Sunday 04:11 UTC)
+    - cron: "11 4 * * 0"
+  workflow_dispatch:
+    inputs:
+      keep_days:
+        description: "Delete artifacts older than N days (0 = delete all)"
+        required: false
+        default: "3"
+      delete_caches:
+        description: "Also delete all Actions caches"
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: cleanup-actions-storage
+  cancel-in-progress: true
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Delete old artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP_DAYS: ${{ github.event.inputs.keep_days || '3' }}
+        run: |
+          set -euo pipefail
+          keep_days="${KEEP_DAYS:-3}"
+          if ! [[ "$keep_days" =~ ^[0-9]+$ ]]; then
+            echo "Invalid keep_days: $keep_days" >&2
+            exit 1
+          fi
+
+          deleted=0
+          kept=0
+          now_epoch=$(date -u +%s)
+          cutoff_epoch=$(( now_epoch - keep_days * 86400 ))
+
+          page=1
+          while :; do
+            resp="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100&page=${page}")"
+            count="$(jq '.artifacts | length' <<<"$resp")"
+            [ "$count" -gt 0 ] || break
+
+            while IFS=$'\t' read -r id name created expired; do
+              [ -n "$id" ] || continue
+              [ "$expired" = "true" ] && continue
+              created_epoch=$(date -u -d "$created" +%s)
+              if [ "$keep_days" -eq 0 ] || [ "$created_epoch" -lt "$cutoff_epoch" ]; then
+                echo "Deleting artifact #$id ($name) created $created"
+                gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}" >/dev/null
+                deleted=$((deleted + 1))
+              else
+                kept=$((kept + 1))
+              fi
+            done < <(jq -r '.artifacts[] | [.id, .name, .created_at, (.expired|tostring)] | @tsv' <<<"$resp")
+
+            [ "$count" -lt 100 ] && break
+            page=$((page + 1))
+          done
+
+          {
+            echo "## Artifact cleanup"
+            echo
+            echo "- deleted: \`$deleted\`"
+            echo "- kept: \`$kept\`"
+            echo "- keep_days: \`$keep_days\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Delete Actions caches
+        if: >-
+          github.event_name == 'workflow_dispatch' && inputs.delete_caches ||
+          github.event_name == 'schedule' && github.event.schedule == '11 4 * * 0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          deleted=0
+          for round in $(seq 1 50); do
+            resp="$(gh api "repos/${GITHUB_REPOSITORY}/actions/caches?per_page=100")"
+            count="$(jq '.actions_caches | length' <<<"$resp")"
+            total="$(jq -r '.total_count // 0' <<<"$resp")"
+            echo "Round $round: page_count=$count total_count=$total"
+            [ "$count" -gt 0 ] || break
+
+            while IFS=$'\t' read -r id key ref; do
+              [ -n "$id" ] || continue
+              echo "Deleting cache #$id key=${key:0:70}..."
+              if gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/caches/${id}" >/dev/null 2>&1; then
+                deleted=$((deleted + 1))
+              else
+                enc_key=$(jq -nr --arg k "$key" '$k|@uri')
+                enc_ref=$(jq -nr --arg r "$ref" '$r|@uri')
+                gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/caches?key=${enc_key}&ref=${enc_ref}" >/dev/null || true
+                deleted=$((deleted + 1))
+              fi
+            done < <(jq -r '.actions_caches[] | [.id, .key, .ref] | @tsv' <<<"$resp")
+          done
+
+          {
+            echo "## Cache cleanup"
+            echo
+            echo "- deleted (approx): \`$deleted\`"
+          } >> "$GITHUB_STEP_SUMMARY"
