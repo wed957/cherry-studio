@@ -227,11 +227,32 @@ jobs:
             immutable_assets="$RUNNER_TEMP/immutable-assets.txt"
             immutable_digests="$RUNNER_TEMP/immutable-digests.txt"
 
+            # Tag endpoint + backoff; avoid laggy list API for health checks.
             query_release() {
               local tag="$1" destination="$2"
-              gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-                | jq -s --arg tag "$tag" \
-                  '[.[][] | select(.tag_name == $tag)]' > "$destination"
+              local attempt=1 delay=2 tmp="$destination.tag.json" err="$destination.tag.err"
+              while [ "$attempt" -le 6 ]; do
+                : > "$err"
+                if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" > "$tmp" 2>"$err"; then
+                  if jq -e --arg tag "$tag" \
+                    '(.tag_name == $tag) and ((.id | type) == "number")' "$tmp" >/dev/null; then
+                    jq '[.]' "$tmp" > "$destination"
+                    return 0
+                  fi
+                else
+                  if grep -Eiq '404|Not Found|HTTP 404' "$err" 2>/dev/null || [ ! -s "$tmp" ]; then
+                    if [ "$attempt" -ge 2 ]; then
+                      echo '[]' > "$destination"
+                      return 0
+                    fi
+                  fi
+                fi
+                [ "$attempt" -lt 6 ] && sleep "$delay"
+                delay=$((delay * 2))
+                attempt=$((attempt + 1))
+              done
+              echo '[]' > "$destination"
+              return 0
             }
 
             resolve_tag_commit() {
@@ -686,7 +707,7 @@ jobs:
             ${{ runner.temp }}/upstream-candidate-staging/candidate.bundle
             ${{ runner.temp }}/upstream-candidate-staging/metadata.env
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 1
 
   stage:
     name: Stage candidate ref without executing candidate code
@@ -917,11 +938,36 @@ jobs:
               echo "- Diagnostic ref: \`${CANDIDATE_REF:-not-created}\`"
               echo
               echo 'Review the run summary and the first failed job. Branch updates are lease-guarded, and every accepted build has an immutable release.'
+              echo
+              echo 'To mute automatic reopen after a manual close, add `<!-- automation-suppress-reopen -->` to the issue body or label it `automation-muted`.'
             } > "$body"
 
             if [ -n "$issue_number" ]; then
-              gh issue reopen "$issue_number" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || true
-              gh issue edit "$issue_number" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+              issue_meta="$(gh issue view "$issue_number" --repo "$GITHUB_REPOSITORY" --json state,body,labels)"
+              issue_state="$(jq -r '.state' <<<"$issue_meta")"
+              issue_body="$(jq -r '.body // ""' <<<"$issue_meta")"
+              muted=false
+              if jq -e '.labels[]?.name == "automation-muted"' <<<"$issue_meta" >/dev/null 2>&1; then
+                muted=true
+              fi
+              if grep -Fq '<!-- automation-suppress-reopen -->' <<<"$issue_body"; then
+                muted=true
+              fi
+
+              if [ "$issue_state" = 'CLOSED' ] && [ "$muted" = 'true' ]; then
+                gh issue comment "$issue_number" --repo "$GITHUB_REPOSITORY" \
+                  --body "Sync still failing on run https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID, but reopen is suppressed (\`automation-muted\` / suppress marker)."
+                echo '::warning title=Upstream sync failed (muted)::Failure recorded without reopening the muted diagnostic issue.'
+              else
+                if [ "$issue_state" = 'CLOSED' ]; then
+                  gh issue reopen "$issue_number" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || true
+                fi
+                # Preserve a human suppress marker if present in the previous body.
+                if grep -Fq '<!-- automation-suppress-reopen -->' <<<"$issue_body"; then
+                  printf '\n\n<!-- automation-suppress-reopen -->\n' >> "$body"
+                fi
+                gh issue edit "$issue_number" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+              fi
             else
               gh issue create --repo "$GITHUB_REPOSITORY" --title "$issue_title" --body-file "$body"
             fi

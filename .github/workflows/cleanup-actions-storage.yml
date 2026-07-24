@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       keep_days:
-        description: "Delete artifacts older than N days (0 = delete all)"
+        description: "Delete artifacts older than N days (0 = delete all). Windows build artifacts are handoff-only (retention-days: 1); durable binaries live on Release assets."
         required: false
-        default: "3"
+        default: "1"
       delete_caches:
         description: "Also delete all Actions caches"
         type: boolean
@@ -35,10 +35,10 @@ jobs:
       - name: Delete old artifacts
         env:
           GH_TOKEN: ${{ github.token }}
-          KEEP_DAYS: ${{ github.event.inputs.keep_days || '3' }}
+          KEEP_DAYS: ${{ github.event.inputs.keep_days || '1' }}
         run: |
           set -euo pipefail
-          keep_days="${KEEP_DAYS:-3}"
+          keep_days="${KEEP_DAYS:-1}"
           if ! [[ "$keep_days" =~ ^[0-9]+$ ]]; then
             echo "Invalid keep_days: $keep_days" >&2
             exit 1

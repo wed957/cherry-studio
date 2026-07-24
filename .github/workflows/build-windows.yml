@@ -342,12 +342,15 @@ jobs:
           Get-Content -LiteralPath $checksumPath
 
       - name: Upload immutable Windows artifact
+        # Transient handoff only; durable binaries live on Release assets.
+        # Keep Actions storage short-lived to avoid free-tier quota blowups.
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ needs.resolve.outputs.artifact_name }}
           path: release-staging/*
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 1
+          compression-level: 0
 
   immutable_release:
     name: Publish and verify immutable candidate release
@@ -600,20 +603,60 @@ jobs:
             printf '%s\tsha256:%s\n' "$asset" "$(sha256sum "release-staging/$asset" | awk '{print $1}')"
           done < "$expected_assets" | LC_ALL=C sort > "$expected_digests"
 
+          # Prefer tag/id endpoints over GET /releases list (CDN eventually-consistent).
+          # After POST create, always trust the response body (id/upload_url birth certificate).
+          api_get_release_by_id() {
+            local release_id="$1" destination="$2" attempt=1 delay=2
+            while [ "$attempt" -le 5 ]; do
+              if gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$destination" 2>/dev/null \
+                && jq -e --argjson id "$release_id" '(.id == $id)' "$destination" >/dev/null; then
+                return 0
+              fi
+              [ "$attempt" -lt 5 ] && sleep "$delay"
+              delay=$((delay * 2))
+              attempt=$((attempt + 1))
+            done
+            return 1
+          }
+
+          # Writes a 0-or-1 element JSON array for call-site compatibility.
           query_release() {
-            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-              | jq -s --arg tag "$IMMUTABLE_TAG" \
-                '[.[][] | select(.tag_name == $tag)]' > "$release_query"
+            local attempt=1 delay=2 tmp="$release_query.tag.json" err="$release_query.tag.err"
+            while [ "$attempt" -le 5 ]; do
+              : > "$err"
+              if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$IMMUTABLE_TAG" > "$tmp" 2>"$err"; then
+                if jq -e --arg tag "$IMMUTABLE_TAG" \
+                  '(.tag_name == $tag) and ((.id | type) == "number")' "$tmp" >/dev/null; then
+                  jq '[.]' "$tmp" > "$release_query"
+                  return 0
+                fi
+              else
+                # 404 = genuinely absent (or still invisible). Empty array is valid.
+                if grep -Eiq '404|Not Found|HTTP 404' "$err" 2>/dev/null || [ ! -s "$tmp" ]; then
+                  if [ "$attempt" -ge 2 ]; then
+                    echo '[]' > "$release_query"
+                    return 0
+                  fi
+                fi
+              fi
+              [ "$attempt" -lt 5 ] && sleep "$delay"
+              delay=$((delay * 2))
+              attempt=$((attempt + 1))
+            done
+            # Last resort: treat as absent so create path can proceed; create handles 422 races.
+            echo '[]' > "$release_query"
+            return 0
           }
 
           assert_same_draft() {
             local expected_release_id="$1"
-            # Prefer release-by-id: the list endpoint can lag right after draft creation.
-            if ! gh api "repos/$GITHUB_REPOSITORY/releases/$expected_release_id" > "$release_query.id.json"; then
+            if ! api_get_release_by_id "$expected_release_id" "$release_query.id.json"; then
               echo '::error title=Immutable draft changed::Refusing to mutate a missing, replaced, published, or retargeted immutable release.'
               return 1
             fi
-            if ! jq -e --argjson id "$expected_release_id" --arg tag "$IMMUTABLE_TAG" --arg sha "$SOURCE_SHA"               '(.id == $id) and (.tag_name == $tag) and (.draft == true) and (.prerelease == true) and (.target_commitish == $sha)'               "$release_query.id.json" >/dev/null; then
+            if ! jq -e --argjson id "$expected_release_id" --arg tag "$IMMUTABLE_TAG" --arg sha "$SOURCE_SHA" \
+              '(.id == $id) and (.tag_name == $tag) and (.draft == true) and (.prerelease == true) and (.target_commitish == $sha)' \
+              "$release_query.id.json" >/dev/null; then
               echo '::error title=Immutable draft changed::Refusing to mutate a missing, replaced, published, or retargeted immutable release.'
               return 1
             fi
@@ -621,14 +664,67 @@ jobs:
 
           assert_same_published() {
             local expected_release_id="$1"
-            if ! gh api "repos/$GITHUB_REPOSITORY/releases/$expected_release_id" > "$release_query.id.json"; then
+            if ! api_get_release_by_id "$expected_release_id" "$release_query.id.json"; then
               echo '::error title=Immutable release changed::The published immutable release id, tag, state, or target no longer matches the validated source.'
               return 1
             fi
-            if ! jq -e --argjson id "$expected_release_id" --arg tag "$IMMUTABLE_TAG" --arg sha "$SOURCE_SHA"               '(.id == $id) and (.tag_name == $tag) and (.draft == false) and (.prerelease == true) and (.target_commitish == $sha)'               "$release_query.id.json" >/dev/null; then
+            if ! jq -e --argjson id "$expected_release_id" --arg tag "$IMMUTABLE_TAG" --arg sha "$SOURCE_SHA" \
+              '(.id == $id) and (.tag_name == $tag) and (.draft == false) and (.prerelease == true) and (.target_commitish == $sha)' \
+              "$release_query.id.json" >/dev/null; then
               echo '::error title=Immutable release changed::The published immutable release id, tag, state, or target no longer matches the validated source.'
               return 1
             fi
+          }
+
+          # Create draft from POST body (id + upload_url). Never re-list to "find" what we just created.
+          create_immutable_draft() {
+            local response="$release_query.create.json" err="$release_query.create.err" attempt=1 delay=3
+            : > "$err"
+            if gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+              -f tag_name="$IMMUTABLE_TAG" \
+              -f target_commitish="$SOURCE_SHA" \
+              -f name="Windows $SOURCE_SHA" \
+              -F draft=true -F prerelease=true \
+              > "$response" 2>"$err"; then
+              release_id="$(jq -r '.id' "$response")"
+              release_upload_url="$(jq -r '.upload_url // empty' "$response")"
+              [[ "$release_id" =~ ^[0-9]+$ ]] || {
+                echo '::error title=Invalid draft identity::POST /releases did not return a numeric id.'
+                return 1
+              }
+              # Trust POST body as the birth certificate — no list/tag re-query needed.
+              if ! jq -e --argjson id "$release_id" --arg tag "$IMMUTABLE_TAG" --arg sha "$SOURCE_SHA" \
+                '(.id == $id) and (.tag_name == $tag) and (.draft == true) and (.prerelease == true) and (.target_commitish == $sha)' \
+                "$response" >/dev/null; then
+                echo '::error title=Invalid draft birth certificate::POST /releases response failed immutable draft shape checks.'
+                return 1
+              fi
+              cp -- "$response" "$release_query.id.json"
+              jq '[.]' "$response" > "$release_query"
+              release_is_draft=true
+              return 0
+            fi
+
+            # Concurrent creator or list lag race: release already exists under this tag.
+            if grep -Eiq 'already_exists|Validation Failed|422|Unprocessable' "$err" 2>/dev/null; then
+              while [ "$attempt" -le 6 ]; do
+                if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$IMMUTABLE_TAG" > "$response" 2>/dev/null \
+                  && jq -e --arg tag "$IMMUTABLE_TAG" \
+                    '(.tag_name == $tag) and ((.id | type) == "number")' "$response" >/dev/null; then
+                  release_id="$(jq -r '.id' "$response")"
+                  release_upload_url="$(jq -r '.upload_url // empty' "$response")"
+                  release_is_draft="$(jq -r '.draft' "$response")"
+                  jq '[.]' "$response" > "$release_query"
+                  return 0
+                fi
+                sleep "$delay"
+                delay=$((delay + 2))
+                attempt=$((attempt + 1))
+              done
+            fi
+            echo '::error title=Immutable draft creation failed::Could not create or recover the draft release.'
+            [ -s "$err" ] && cat "$err" >&2 || true
+            return 1
           }
 
           verify_tag_if_present() {
@@ -785,39 +881,38 @@ jobs:
             exit 1
           fi
 
+          release_upload_url=''
           if [ "$release_count" -eq 0 ]; then
-            query_release
-            if [ "$(jq 'length' "$release_query")" -ne 0 ]; then
-              echo '::error title=Immutable release race::The immutable release appeared before draft creation.'
-              exit 1
-            fi
-            release_id="$(
-              gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
-                -f tag_name="$IMMUTABLE_TAG" \
-                -f target_commitish="$SOURCE_SHA" \
-                -f name="Windows $SOURCE_SHA" \
-                -F draft=true -F prerelease=true \
-                --jq '.id'
-            )"
-            release_is_draft=true
-            assert_same_draft "$release_id"
+            create_immutable_draft
           else
             release_id="$(jq -r '.[0].id' "$release_query")"
             release_is_draft="$(jq -r '.[0].draft' "$release_query")"
-            target_commitish="$(jq -r '.[0].target_commitish' "$release_query")"
-            if [ "$target_commitish" != "$SOURCE_SHA" ]; then
-              echo "::error title=Immutable release collision::Release targets $target_commitish instead of $SOURCE_SHA."
-              exit 1
-            fi
-            if [ "$release_is_draft" = 'true' ]; then
-              assert_same_draft "$release_id"
-            elif [ "$release_is_draft" = 'false' ]; then
-              assert_same_published "$release_id"
-              assert_immutable_tag_claimed
-            else
-              echo '::error title=Invalid immutable release state::The draft flag was not a boolean value.'
-              exit 1
-            fi
+            release_upload_url="$(jq -r '.[0].upload_url // empty' "$release_query")"
+          fi
+          [[ "$release_id" =~ ^[0-9]+$ ]] || {
+            echo '::error title=Invalid release identity::GitHub did not return a numeric release ID.'
+            exit 1
+          }
+          # Unified post-resolve guard (covers create, resume, and 422 recovery paths).
+          if ! api_get_release_by_id "$release_id" "$release_query.id.json"; then
+            echo '::error title=Immutable release invisible::Release id from create/resume was not readable after retries.'
+            exit 1
+          fi
+          target_commitish="$(jq -r '.target_commitish' "$release_query.id.json")"
+          release_is_draft="$(jq -r '.draft' "$release_query.id.json")"
+          release_upload_url="$(jq -r '.upload_url // empty' "$release_query.id.json")"
+          if [ "$target_commitish" != "$SOURCE_SHA" ]; then
+            echo "::error title=Immutable release collision::Release targets $target_commitish instead of $SOURCE_SHA."
+            exit 1
+          fi
+          if [ "$release_is_draft" = 'true' ]; then
+            assert_same_draft "$release_id"
+          elif [ "$release_is_draft" = 'false' ]; then
+            assert_same_published "$release_id"
+            assert_immutable_tag_claimed
+          else
+            echo '::error title=Invalid immutable release state::The draft flag was not a boolean value.'
+            exit 1
           fi
 
           if [ "$release_is_draft" = 'true' ]; then
@@ -1022,9 +1117,20 @@ jobs:
           release_query="$RUNNER_TEMP/authoritative-release.json"
 
           query_authoritative_release() {
-            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-              | jq -s --arg tag "$IMMUTABLE_TAG" \
-                '[.[][] | select(.tag_name == $tag)]' > "$release_query"
+            local attempt=1 delay=2 tmp="$release_query.tag.json"
+            while [ "$attempt" -le 6 ]; do
+              if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$IMMUTABLE_TAG" > "$tmp" 2>/dev/null \
+                && jq -e --arg tag "$IMMUTABLE_TAG" \
+                  '(.tag_name == $tag) and ((.id | type) == "number")' "$tmp" >/dev/null; then
+                jq '[.]' "$tmp" > "$release_query"
+                return 0
+              fi
+              [ "$attempt" -lt 6 ] && sleep "$delay"
+              delay=$((delay * 2))
+              attempt=$((attempt + 1))
+            done
+            echo '[]' > "$release_query"
+            return 0
           }
 
           query_authoritative_release
@@ -1039,17 +1145,20 @@ jobs:
           release_id="$(jq -r '.[0].id' "$release_query")"
 
           assert_authoritative_release() {
-            local expected_release_id="$1"
-            query_authoritative_release
-            if [ "$(jq 'length' "$release_query")" -ne 1 ] || \
-              [ "$(jq -r '.[0].id' "$release_query")" != "$expected_release_id" ] || \
-              [ "$(jq -r '.[0].tag_name' "$release_query")" != "$IMMUTABLE_TAG" ] || \
-              [ "$(jq -r '.[0].draft' "$release_query")" != 'false' ] || \
-              [ "$(jq -r '.[0].prerelease' "$release_query")" != 'true' ] || \
-              [ "$(jq -r '.[0].target_commitish' "$release_query")" != "$SOURCE_SHA" ]; then
-              echo '::error title=Immutable release identity race::The authoritative release id, tag, state, or target changed during verification.'
-              return 1
-            fi
+            local expected_release_id="$1" attempt=1 delay=2
+            while [ "$attempt" -le 5 ]; do
+              if gh api "repos/$GITHUB_REPOSITORY/releases/$expected_release_id" > "$release_query.id.json" 2>/dev/null \
+                && jq -e --argjson id "$expected_release_id" --arg tag "$IMMUTABLE_TAG" --arg sha "$SOURCE_SHA" \
+                  '(.id == $id) and (.tag_name == $tag) and (.draft == false) and (.prerelease == true) and (.target_commitish == $sha)' \
+                  "$release_query.id.json" >/dev/null; then
+                return 0
+              fi
+              [ "$attempt" -lt 5 ] && sleep "$delay"
+              delay=$((delay * 2))
+              attempt=$((attempt + 1))
+            done
+            echo '::error title=Immutable release identity race::The authoritative release id, tag, state, or target changed during verification.'
+            return 1
           }
 
           verify_authoritative_tag() {
@@ -1448,9 +1557,29 @@ jobs:
           release_snapshot="$RUNNER_TEMP/rolling-release-guard.json"
 
           query_release() {
-            gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
-              | jq -s --arg tag "$RELEASE_TAG" \
-                '[.[][] | select(.tag_name == $tag)]' > "$release_query" || return 1
+            local attempt=1 delay=2 tmp="$release_query.tag.json" err="$release_query.tag.err"
+            while [ "$attempt" -le 5 ]; do
+              : > "$err"
+              if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$tmp" 2>"$err"; then
+                if jq -e --arg tag "$RELEASE_TAG" \
+                  '(.tag_name == $tag) and ((.id | type) == "number")' "$tmp" >/dev/null; then
+                  jq '[.]' "$tmp" > "$release_query"
+                  return 0
+                fi
+              else
+                if grep -Eiq '404|Not Found|HTTP 404' "$err" 2>/dev/null || [ ! -s "$tmp" ]; then
+                  if [ "$attempt" -ge 2 ]; then
+                    echo '[]' > "$release_query"
+                    return 0
+                  fi
+                fi
+              fi
+              [ "$attempt" -lt 5 ] && sleep "$delay"
+              delay=$((delay * 2))
+              attempt=$((attempt + 1))
+            done
+            echo '[]' > "$release_query"
+            return 0
           }
 
           assert_same_published_release_identity() {
@@ -1595,15 +1724,44 @@ jobs:
           fi
           if [ "$release_count" -eq 0 ]; then
             assert_release_absent_for_creation
-            release_id="$(
-              gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
-                -f tag_name="$RELEASE_TAG" \
-                -f target_commitish="$SOURCE_SHA" \
-                -f name="Windows $RELEASE_TAG" \
-                -F draft=false -F prerelease=true \
-                -f make_latest=false \
-                --jq '.id'
-            )"
+            create_resp="$RUNNER_TEMP/rolling-create.json"
+            create_err="$RUNNER_TEMP/rolling-create.err"
+            : > "$create_err"
+            if gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+              -f tag_name="$RELEASE_TAG" \
+              -f target_commitish="$SOURCE_SHA" \
+              -f name="Windows $RELEASE_TAG" \
+              -F draft=false -F prerelease=true \
+              -f make_latest=false \
+              > "$create_resp" 2>"$create_err"; then
+              release_id="$(jq -r '.id' "$create_resp")"
+              # Birth certificate — do not re-list to discover this release.
+              cp -- "$create_resp" "$release_snapshot"
+            else
+              # Concurrent creator race: recover by tag with backoff.
+              if ! grep -Eiq 'already_exists|Validation Failed|422|Unprocessable' "$create_err" 2>/dev/null; then
+                echo '::error title=Rolling release creation failed::POST /releases failed.'
+                [ -s "$create_err" ] && cat "$create_err" >&2 || true
+                exit 1
+              fi
+              recovered=false
+              delay=3
+              for attempt in 1 2 3 4 5 6; do
+                if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$create_resp" 2>/dev/null \
+                  && jq -e --arg tag "$RELEASE_TAG" \
+                    '(.tag_name == $tag) and ((.id | type) == "number")' "$create_resp" >/dev/null; then
+                  release_id="$(jq -r '.id' "$create_resp")"
+                  recovered=true
+                  break
+                fi
+                sleep "$delay"
+                delay=$((delay + 2))
+              done
+              if [ "$recovered" != 'true' ]; then
+                echo '::error title=Rolling release creation race::Tag exists but release was not visible after retries.'
+                exit 1
+              fi
+            fi
           else
             release_id="$(jq -r '.[0].id' "$release_query")"
           fi
