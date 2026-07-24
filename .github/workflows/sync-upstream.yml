@@ -49,7 +49,7 @@ jobs:
             exit 1
           fi
 
-      - name: Verify private standalone repository
+      - name: Verify standalone repository
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -60,9 +60,9 @@ jobs:
             exit 1
           fi
           repo_json="$(gh api "repos/$GITHUB_REPOSITORY")"
-          if ! jq -e '(.private == true) and (.fork == false) and (.parent == null) and (.source == null)' \
+          if ! jq -e '(.fork == false) and (.parent == null) and (.source == null)' \
             <<<"$repo_json" >/dev/null; then
-            echo '::error title=Repository safety preflight failed::Automatic upstream sync requires a private standalone repository, not a fork.'
+            echo '::error title=Repository safety preflight failed::Automatic upstream sync requires a standalone repository (not a fork).'
             exit 1
           fi
 
@@ -534,6 +534,7 @@ jobs:
               case "$file" in
                 .github/workflows/sync-upstream.yml | \
                   .github/workflows/build-windows.yml | \
+                  .github/workflows/cleanup-actions-storage.yml | \
                   scripts/context-count-patch.ts)
                   if git checkout --ours -- "$file" 2>/dev/null; then
                     git add -- "$file"
@@ -583,14 +584,17 @@ jobs:
           git checkout "$base_main_sha" -- \
             scripts/context-count-patch.ts \
             .github/workflows/sync-upstream.yml \
-            .github/workflows/build-windows.yml
+            .github/workflows/build-windows.yml \
+            .github/workflows/cleanup-actions-storage.yml
 
           while IFS= read -r -d '' index_entry; do
             metadata="${index_entry%%$'\t'*}"
             workflow_path="${index_entry#*$'\t'}"
             read -r mode object_sha stage_number <<< "$metadata"
             case "$workflow_path" in
-              .github/workflows/sync-upstream.yml | .github/workflows/build-windows.yml)
+              .github/workflows/sync-upstream.yml | \
+                .github/workflows/build-windows.yml | \
+                .github/workflows/cleanup-actions-storage.yml)
                 expected_blob="$(git rev-parse "$base_main_sha:$workflow_path")"
                 if [ "$mode" != '100644' ] || [ "$stage_number" != '0' ] || \
                   [ "$object_sha" != "$expected_blob" ]; then
@@ -608,12 +612,13 @@ jobs:
           git ls-files --stage -- .github/workflows > "$workflow_index"
           for workflow_path in \
             .github/workflows/build-windows.yml \
+            .github/workflows/cleanup-actions-storage.yml \
             .github/workflows/sync-upstream.yml; do
             expected_blob="$(git rev-parse "$base_main_sha:$workflow_path")"
             grep -Fxq "100644 $expected_blob 0"$'\t'"$workflow_path" "$workflow_index"
           done
-          [ "$(wc -l < "$workflow_index")" -eq 2 ] || {
-            echo '::error title=Workflow allowlist failure::Candidate index contains workflow entries outside the two trusted blobs.'
+          [ "$(wc -l < "$workflow_index")" -eq 3 ] || {
+            echo '::error title=Workflow allowlist failure::Candidate index contains workflow entries outside the three trusted blobs.'
             cat "$workflow_index"
             exit 1
           }

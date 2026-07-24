@@ -1,12 +1,12 @@
-# wed957 私有 Windows 构建说明
+# wed957 Windows 构建说明
 
-本仓库是从 `CherryHQ/cherry-studio` 的稳定 `v1` 分支导入的独立仓库，目标是保留本地修复并只生成 Windows 构建。它不是 GitHub fork；`upstream-v1` 分支仅用于记录最近一次同步的上游提交。
+本仓库是从 `CherryHQ/cherry-studio` 的稳定 `v1` 分支导入的独立仓库，目标是保留本地修复并只生成 Windows 构建。它不是 GitHub fork；`upstream-v1` 分支仅用于记录最近一次同步的上游提交。仓库当前为公开独立仓库。
 
 ## GitHub Actions
 
 `Sync upstream v1`（`.github/workflows/sync-upstream.yml`）每天运行一次，也可以手动运行。同步采用候选事务，不会先改动 `main`：
 
-1. 从可信的下游 `main` 安装依赖，并要求 checkout SHA 与本次 schedule/dispatch 的 `github.workflow_sha` 一致；合并前会把补丁器及已锁定安装的 TypeScript 复制到 `RUNNER_TEMP` 隔离运行，随后删除 workspace `node_modules`。读取上游明确公布的 `refs/heads/v1` SHA、精确抓取该 ref 并复核 SHA 后才执行合并；changed 路径在合并前移除 API token，候选若跟踪任何 `node_modules` 路径会立即失败，最终提交也只重新暂存已跟踪文件。因此旧 workflow 不会验证更新后的候选，候选提交无法用依赖遮蔽执行代码，带写权限的步骤也不会执行候选安装脚本。同步始终恢复本仓库的补丁器和两个 Windows workflow，并从 Git index 删除其余 workflow（包括 symlink 和 gitlink），最终只接受两个来自可信基线的 `100644` blob。
+1. 从可信的下游 `main` 安装依赖，并要求 checkout SHA 与本次 schedule/dispatch 的 `github.workflow_sha` 一致；合并前会把补丁器及已锁定安装的 TypeScript 复制到 `RUNNER_TEMP` 隔离运行，随后删除 workspace `node_modules`。读取上游明确公布的 `refs/heads/v1` SHA、精确抓取该 ref 并复核 SHA 后才执行合并；changed 路径在合并前移除 API token，候选若跟踪任何 `node_modules` 路径会立即失败，最终提交也只重新暂存已跟踪文件。因此旧 workflow 不会验证更新后的候选，候选提交无法用依赖遮蔽执行代码，带写权限的步骤也不会执行候选安装脚本。同步始终恢复本仓库的补丁器和三个可信 workflow（`sync-upstream.yml`、`build-windows.yml`、`cleanup-actions-storage.yml`），并从 Git index 删除其余 workflow（包括 symlink 和 gitlink），最终只接受三个来自可信基线的 `100644` blob。
 2. workflow 或补丁器冲突会恢复可信的下游版本；其他源码、配置或锁文件冲突会安全失败并列出文件，不会用上游版本覆盖本地修复。
 3. 语义补丁成功应用并复核后，工作流只上传 `candidate.bundle` 和 `metadata.env`。独立的写权限 job 会校验文件白名单、完整 SHA、提交祖先关系以及 `main`/`upstream-v1` 当前指针，但不会执行候选树中的代码；上游 `v1` 必须从已跟踪提交快进，重写或回退历史会停止同步。通过后才以空期望 lease 推送唯一的 `automation/upstream-candidate-<run_id>-<run_attempt>` 临时分支，拒绝覆盖被其他 SHA 抢占的引用。
 4. `Build Windows` 作为 reusable workflow 接收候选的完整 40 位 SHA，并与其他所有 Windows 发布共用一个全局 concurrency 锁；它在 `windows-2022` 上运行补丁契约、补丁器测试、全量单元测试和完整的非写式 `pnpm ci:basic-check`，再执行 `pnpm build:win`。测试脚本和构建完成后都会检查 tracked tree 必须保持干净。`dist` 和逐个资产必须位于 workspace 内且不能是 symlink、junction 或 reparse point；构建必须同时产出 x64/arm64 的 portable、setup 安装包及至少一个 `latest*.yml`。允许发布的文件会写入严格格式的 `SHA256SUMS.txt` 并保存为带 SHA 和 run 标识的 Actions artifact，后续每次下载都要求普通顶层文件、manifest 与 payload 精确覆盖、白名单和 `sha256sum --strict --check` 同时通过。
@@ -15,7 +15,7 @@
 
 自动 `Sync upstream v1` 调用候选构建或恢复构建时不会传递 `MAIN_VITE_CHERRYAI_CLIENT_SECRET`、`MAIN_VITE_MINERU_API_KEY`、`RENDERER_VITE_AIHUBMIX_SECRET`、`RENDERER_VITE_PPIO_APP_SECRET`，因此自动候选始终是 secret-free 构建，避免未晋级候选读取仓库构建 secrets。直接推送 `main` 或手动触发 `Build Windows` 时仍保留原有可选 secret 注入行为。
 
-两个 workflow 都会在执行入口通过 GitHub API 复核仓库必须恰好是私有独立仓库 `wed957/cherry-studio`，并要求 `private=true`、`fork=false`、`parent=null`、`source=null`。仓库被改为公开、转换为 fork，或 reusable workflow 被其他仓库调用时都会 fail-closed，不会继续同步或发布。
+`Sync upstream v1` 与 `Build Windows` 都会在执行入口通过 GitHub API 复核仓库必须恰好是独立仓库 `wed957/cherry-studio`，并要求 `fork=false`、`parent=null`、`source=null`。转换为 fork，或 reusable workflow 被其他仓库调用时都会 fail-closed，不会继续同步或发布。仓库可见性（public/private）不再作为阻断条件；当前仓库为公开时仍允许自动同步与 Windows 发布。
 
 当上游 SHA 没有变化时，工作流仍会确认 `upstream-v1` 是 `main` 的祖先并执行上下文补丁契约检查，然后比较当前 `main`、`windows-<main SHA>`、`windows-latest` 两个 tag 的提交，以及两个 Release 的资产 name/digest。只有补丁契约和两层 Release 都健康时才真正跳过构建；immutable 健康但 rolling 漂移时，workflow 使用 `publish_only` 从已发布 immutable 下载并复核权威资产后修复 `windows-latest`；immutable 缺失或不健康时，对当前 `main` 执行完整测试与重建。恢复失败会让同步失败，并保持固定失败 Issue 为打开状态。
 
@@ -23,7 +23,7 @@
 
 `windows-<完整 SHA>` 命名空间全部保留给权威、不可变审计记录，手动 `release_tag` 不能以 `-` 开头，也不能占用任何 `windows-<40 位十六进制>` tag。`windows-latest` 是方便下载的滚动指针；GitHub 没有提供同时更新 Release 元数据和全部资产的原子 API，Git 对 no-op branch update 也可能不发送 main 命令，因此 rolling 使用 preflight、双 lease 和更新后复核约束竞态，而不是把它当作完整事务。若滚动 Release 更新中断，tag 可能已经指向新 SHA，资产也可能只完成部分覆盖；工作流不会用旧 tag 掩盖这种状态，应以已验证的 immutable Release 为准，重新运行同步让 `publish_only` 恢复，不能把短暂的 `windows-latest` 状态当作构建完整性的唯一证据。
 
-私有 GitHub Release 的安装包和 `latest*.yml` 不能被匿名 `electron-updater` 读取。当前 Release 用于仓库成员下载和审计，不应直接把私有 Release URL 配给面向未认证用户的自动更新。若需要终端自动更新，应另外提供公开的 generic feed，或在发行版中关闭自动检查并使用受控下载入口。
+公开 GitHub Release 的安装包和 `latest*.yml` 可被匿名 `electron-updater` 读取；若仓库重新设为私有，则不能依赖私有 Release URL 做未认证自动更新，应另外提供公开 generic feed，或关闭自动检查并使用受控下载入口。
 
 ## 上下文数量修复
 
@@ -71,4 +71,4 @@ node hook.js --restore
 
 ## AGPL-3.0
 
-Cherry Studio 及本仓库沿用 `AGPL-3.0`。分发修改后的安装包或提供网络服务时，应保留版权和许可证声明，并向用户提供对应源码及相同许可证下的修改内容。私有仓库不改变这些义务，也不授予上游商标或服务的额外权利。
+Cherry Studio 及本仓库沿用 `AGPL-3.0`。分发修改后的安装包或提供网络服务时，应保留版权和许可证声明，并向用户提供对应源码及相同许可证下的修改内容。公开或私有仓库都不改变这些义务，也不授予上游商标或服务的额外权利。
