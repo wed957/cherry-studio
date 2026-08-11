@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { builtinTools, getExposedBuiltinTools, getRuntimeAllowedTools } from '../tools'
 
@@ -168,45 +168,53 @@ describe('ClaudeCodeService runtime authorization wiring', () => {
     })
   })
 
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it.each([
     ['non-Windows', false, false],
     ['Windows', true, true]
-  ])('handles PowerShell consistently in both runtime authorization channels on %s', async (_, windows, expected) => {
-    serviceMocks.isWin = windows
-    const { default: ClaudeCodeService } = await import('../index')
-    const service = new ClaudeCodeService()
-    const session = {
-      id: `session-${windows}`,
-      agent_id: 'agent-test',
-      agent_type: 'claude-code',
-      accessible_paths: ['/tmp/claude-tools-test'],
-      allowed_tools: ['PowerShell', 'Bash'],
-      configuration: {},
-      instructions: '',
-      mcps: [],
-      model: 'anthropic:claude-test'
-    }
-
-    await service.invoke('hello', session as never, new AbortController())
-    await vi.waitFor(() => expect(serviceMocks.query).toHaveBeenCalledTimes(1))
-
-    const options = serviceMocks.query.mock.calls[0][0].options
-    expect(options.allowedTools).toContain('Bash')
-    expect(options.allowedTools.includes('PowerShell')).toBe(expected)
-
-    const permission = await options.canUseTool(
-      'PowerShell',
-      { command: 'Get-Date' },
-      {
-        signal: new AbortController().signal,
-        suggestions: [],
-        toolUseID: 'tool-powershell'
+  ] as const)(
+    'handles PowerShell consistently in both runtime authorization channels on %s',
+    async (_, windows, expected) => {
+      serviceMocks.isWin = windows
+      const { default: ClaudeCodeService } = await import('../index')
+      vi.spyOn(process, 'platform', 'get').mockReturnValue(windows ? 'win32' : 'linux')
+      const service = new ClaudeCodeService()
+      const session = {
+        id: `session-${windows}`,
+        agent_id: 'agent-test',
+        agent_type: 'claude-code',
+        accessible_paths: ['/tmp/claude-tools-test'],
+        allowed_tools: ['PowerShell', 'Bash'],
+        configuration: {},
+        instructions: '',
+        mcps: [],
+        model: 'anthropic:claude-test'
       }
-    )
-    expect(permission.behavior === 'allow').toBe(expected)
-    expect(serviceMocks.promptForToolApproval).toHaveBeenCalledTimes(expected ? 0 : 1)
 
-    expect(session.allowed_tools).toEqual(['PowerShell', 'Bash'])
-    expect(serviceMocks.updateSession).not.toHaveBeenCalled()
-  })
+      await service.invoke('hello', session as never, new AbortController())
+      await vi.waitFor(() => expect(serviceMocks.query).toHaveBeenCalledTimes(1))
+
+      const options = serviceMocks.query.mock.calls[0][0].options
+      expect(options.allowedTools).toContain('Bash')
+      expect(options.allowedTools.includes('PowerShell')).toBe(expected)
+
+      const permission = await options.canUseTool(
+        'PowerShell',
+        { command: 'Get-Date' },
+        {
+          signal: new AbortController().signal,
+          suggestions: [],
+          toolUseID: 'tool-powershell'
+        }
+      )
+      expect(permission.behavior === 'allow').toBe(expected)
+      expect(serviceMocks.promptForToolApproval).toHaveBeenCalledTimes(expected ? 0 : 1)
+
+      expect(session.allowed_tools).toEqual(['PowerShell', 'Bash'])
+      expect(serviceMocks.updateSession).not.toHaveBeenCalled()
+    }
+  )
 })

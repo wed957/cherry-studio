@@ -93,26 +93,24 @@ function createSessionRow(overrides: Partial<SessionRow> = {}): SessionRow {
   }
 }
 
-interface TestFsModule {
-  mkdtempSync(prefix: string): string
-  rmSync(path: string, options: { recursive: boolean; force: boolean }): void
-}
-
-interface TestOsModule {
-  tmpdir(): string
-}
-
-interface TestPathModule {
-  join(...paths: string[]): string
-}
-
 async function createSessionDatabase(rows: SessionRow[]) {
-  const fs = await vi.importActual<TestFsModule>('node:fs')
-  const os = await vi.importActual<TestOsModule>('node:os')
-  const path = await vi.importActual<TestPathModule>('node:path')
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-session-repair-test-'))
-  const client = createClient({ url: `file:${path.join(directory, 'agents.db')}`, intMode: 'number' })
+  const client = createClient({ url: ':memory:', intMode: 'number' })
   const database = drizzle(client)
+  const runTransaction = async (callback: Parameters<typeof database.transaction>[0]) => {
+    await client.execute('BEGIN IMMEDIATE')
+
+    try {
+      const result = await callback(database as never)
+      await client.execute('COMMIT')
+      return result
+    } catch (error) {
+      await client.execute('ROLLBACK')
+      throw error
+    }
+  }
+
+  // Keep fixture transactions on one connection so in-memory state is preserved and no file handle is leaked.
+  database.transaction = runTransaction as typeof database.transaction
 
   await client.execute(`
     CREATE TABLE sessions (
@@ -139,10 +137,7 @@ async function createSessionDatabase(rows: SessionRow[]) {
 
   return {
     database,
-    cleanup: () => {
-      client.close()
-      fs.rmSync(directory, { recursive: true, force: true })
-    }
+    cleanup: () => client.close()
   }
 }
 
