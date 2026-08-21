@@ -1898,6 +1898,24 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           trap - EXIT
 
+      - name: Remove immutable snapshot releases
+        # The page keeps exactly one entry; snapshots already served their
+        # purpose as repair anchors once the rolling release verified.
+        if: steps.rolling_release.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          snapshot_tags="$RUNNER_TEMP/snapshot-tags.txt"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq '.[] | select(.tag_name | test("^windows-[0-9a-f]{40}$")) | .tag_name' \
+            > "$snapshot_tags"
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            echo "Removing snapshot release and tag: $tag"
+            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+          done < "$snapshot_tags"
+
   cleanup:
     name: Remove promoted candidate ref
     needs: [resolve, promote, publish]
