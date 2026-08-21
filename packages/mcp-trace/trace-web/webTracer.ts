@@ -1,7 +1,6 @@
 import { W3CTraceContextPropagator } from '@opentelemetry/core'
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http'
 import type { SpanProcessor } from '@opentelemetry/sdk-trace-base'
-import { BatchSpanProcessor, ConsoleSpanExporter } from '@opentelemetry/sdk-trace-base'
+import { NoopSpanProcessor } from '@opentelemetry/sdk-trace-base'
 import { WebTracerProvider } from '@opentelemetry/sdk-trace-web'
 
 import type { TraceConfig } from '../trace-core/types/config'
@@ -21,7 +20,8 @@ export class WebTracer {
       defaultConfig.headers = config.headers || defaultConfig.headers
       defaultConfig.defaultTracerName = config.defaultTracerName || defaultConfig.defaultTracerName
     }
-    this.processor = spanProcessor || new BatchSpanProcessor(this.getExporter())
+    // Never export spans automatically. A caller may provide an explicit local processor.
+    this.processor = spanProcessor || new NoopSpanProcessor()
     this.provider = new WebTracerProvider({
       spanProcessors: [this.processor]
     })
@@ -29,16 +29,6 @@ export class WebTracer {
       propagator: new W3CTraceContextPropagator(),
       contextManager: contextManager
     })
-  }
-
-  private static getExporter() {
-    if (defaultConfig.endpoint) {
-      return new OTLPTraceExporter({
-        url: `${defaultConfig.endpoint}/v1/traces`,
-        headers: defaultConfig.headers
-      })
-    }
-    return new ConsoleSpanExporter()
   }
 }
 

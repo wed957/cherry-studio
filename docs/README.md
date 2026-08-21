@@ -49,7 +49,6 @@ This directory contains the project documentation in multiple languages.
 | [日志使用指南](./zh/guides/logging.md) | 如何使用日志服务 |
 | [中间件开发](./zh/guides/middleware.md) | 如何编写中间件 |
 | [记忆功能](./zh/guides/memory.md) | 记忆功能使用指南 |
-| [赞助信息](./zh/guides/sponsor.md) | 赞助相关信息 |
 
 ### 参考 (References)
 
@@ -74,7 +73,6 @@ The following documents are only available in Chinese and need English translati
 - `guides/contributing.md`
 - `guides/memory.md`
 - `guides/middleware.md`
-- `guides/sponsor.md`
 - `references/message-system.md`
 - `references/database.md`
 - `references/services.md`

@@ -11,7 +11,6 @@ import type { AppUpdater as _AppUpdater, Logger, NsisUpdater, UpdateCheckResult 
 import { autoUpdater } from 'electron-updater'
 import path from 'path'
 
-import { analyticsService } from './AnalyticsService'
 import { configManager } from './ConfigManager'
 import { windowService } from './WindowService'
 
@@ -136,8 +135,6 @@ export default class AppUpdater {
   }
 
   public async checkForUpdates() {
-    void analyticsService.trackAppUpdate()
-
     if (isWin && 'PORTABLE_EXECUTABLE_DIR' in process.env) {
       return {
         currentVersion: app.getVersion(),

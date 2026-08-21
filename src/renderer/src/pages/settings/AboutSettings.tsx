@@ -15,7 +15,7 @@ import { runAsyncFunction } from '@renderer/utils'
 import { UpgradeChannel } from '@shared/config/constant'
 import { Avatar, Button, Progress, Radio, Row, Switch, Tag, Tooltip } from 'antd'
 import { debounce } from 'lodash'
-import { Briefcase, Bug, Building2, Github, Globe, Mail, Rss } from 'lucide-react'
+import { Bug, Github, Mail, Rss } from 'lucide-react'
 import { BadgeQuestionMark } from 'lucide-react'
 import type { FC } from 'react'
 import { useEffect, useState } from 'react'
@@ -78,10 +78,6 @@ const AboutSettings: FC = () => {
 
   const debug = async () => {
     await window.api.devTools.toggle()
-  }
-
-  const showEnterprise = async () => {
-    onOpenWebsite('https://enterprise.cherry-ai.com')
   }
 
   const showReleases = async () => {
@@ -296,14 +292,6 @@ const AboutSettings: FC = () => {
         <SettingDivider />
         <SettingRow>
           <SettingRowTitle>
-            <Globe size={18} />
-            {t('settings.about.website.title')}
-          </SettingRowTitle>
-          <Button onClick={() => onOpenWebsite('https://cherry-ai.com')}>{t('settings.about.website.button')}</Button>
-        </SettingRow>
-        <SettingDivider />
-        <SettingRow>
-          <SettingRowTitle>
             <Github size={18} />
             {t('settings.about.feedback.title')}
           </SettingRowTitle>
@@ -314,28 +302,10 @@ const AboutSettings: FC = () => {
         <SettingDivider />
         <SettingRow>
           <SettingRowTitle>
-            <Building2 size={18} />
-            {t('settings.about.enterprise.title')}
-          </SettingRowTitle>
-          <Button onClick={showEnterprise}>{t('settings.about.website.button')}</Button>
-        </SettingRow>
-        <SettingDivider />
-        <SettingRow>
-          <SettingRowTitle>
             <Mail size={18} />
             {t('settings.about.contact.title')}
           </SettingRowTitle>
           <Button onClick={mailto}>{t('settings.about.contact.button')}</Button>
-        </SettingRow>
-        <SettingDivider />
-        <SettingRow>
-          <SettingRowTitle>
-            <Briefcase size={18} />
-            {t('settings.about.careers.title')}
-          </SettingRowTitle>
-          <Button onClick={() => onOpenWebsite('https://www.cherry-ai.com/careers')}>
-            {t('settings.about.careers.button')}
-          </Button>
         </SettingRow>
         <SettingDivider />
         <SettingRow>

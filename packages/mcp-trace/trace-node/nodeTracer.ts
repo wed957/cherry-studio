@@ -2,9 +2,8 @@ import type { Tracer } from '@opentelemetry/api'
 import { trace } from '@opentelemetry/api'
 import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks'
 import { W3CTraceContextPropagator } from '@opentelemetry/core'
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http'
 import type { SpanProcessor } from '@opentelemetry/sdk-trace-base'
-import { BatchSpanProcessor, ConsoleSpanExporter } from '@opentelemetry/sdk-trace-base'
+import { NoopSpanProcessor } from '@opentelemetry/sdk-trace-base'
 import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node'
 
 import type { TraceConfig } from '../trace-core/types/config'
@@ -22,7 +21,8 @@ export class NodeTracer {
       defaultConfig.headers = config.headers || defaultConfig.headers
       defaultConfig.defaultTracerName = config.defaultTracerName || defaultConfig.defaultTracerName
     }
-    this.spanProcessor = spanProcessor || new BatchSpanProcessor(this.getExporter())
+    // Never export spans automatically. A caller may provide an explicit local processor.
+    this.spanProcessor = spanProcessor || new NoopSpanProcessor()
     this.provider = new NodeTracerProvider({
       spanProcessors: [this.spanProcessor]
     })
@@ -31,16 +31,6 @@ export class NodeTracer {
       contextManager: new AsyncLocalStorageContextManager()
     })
     this.defaultTracer = trace.getTracer(config?.defaultTracerName || 'default')
-  }
-
-  private static getExporter(config?: TraceConfig) {
-    if (config && config.endpoint) {
-      return new OTLPTraceExporter({
-        url: `${config.endpoint}/v1/traces`,
-        headers: config.headers || undefined
-      })
-    }
-    return new ConsoleSpanExporter()
   }
 
   public static getTracer() {

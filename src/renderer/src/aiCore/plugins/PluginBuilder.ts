@@ -7,7 +7,6 @@ import {
   isQwen35to39Model,
   isSupportedThinkingTokenQwenModel
 } from '@renderer/config/models'
-import { getEnableDeveloperMode } from '@renderer/hooks/useSettings'
 import type { Assistant, Model, Provider } from '@renderer/types'
 import { SystemProviderIds } from '@renderer/types'
 import { isOllamaProvider, isSupportEnableThinkingProvider } from '@renderer/utils/provider'
@@ -24,7 +23,6 @@ import { createReasoningExtractionPlugin } from './reasoningExtractionPlugin'
 import { searchOrchestrationPlugin } from './searchOrchestrationPlugin'
 import { createSimulateStreamingPlugin } from './simulateStreamingPlugin'
 import { createSkipGeminiThoughtSignaturePlugin } from './skipGeminiThoughtSignaturePlugin'
-import { createTelemetryPlugin } from './telemetryPlugin'
 
 const logger = loggerService.withContext('PluginBuilder')
 
@@ -45,17 +43,6 @@ export interface BuildPluginsContext {
  */
 export function buildPlugins({ provider, model, config }: BuildPluginsContext): AiPlugin[] {
   const plugins: AiPlugin<any, any>[] = []
-
-  if (config.topicId && getEnableDeveloperMode()) {
-    // 0. 添加 telemetry 插件
-    plugins.push(
-      createTelemetryPlugin({
-        enabled: true,
-        topicId: config.topicId,
-        assistant: config.assistant
-      })
-    )
-  }
 
   // === PDF Compatibility ===
   // Must run before other plugins (e.g., Anthropic cache token estimation)

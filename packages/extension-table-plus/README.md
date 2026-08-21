@@ -3,7 +3,6 @@
 [![Version](https://img.shields.io/npm/v/@tiptap/extension-table.svg?label=version)](https://www.npmjs.com/package/@tiptap/extension-table)
 [![Downloads](https://img.shields.io/npm/dm/@tiptap/extension-table.svg)](https://npmcharts.com/compare/tiptap?minimal=true)
 [![License](https://img.shields.io/npm/l/@tiptap/extension-table.svg)](https://www.npmjs.com/package/@tiptap/extension-table)
-[![Sponsor](https://img.shields.io/static/v1?label=Sponsor&message=%E2%9D%A4&logo=GitHub)](https://github.com/sponsors/ueberdosis)
 
 ## Introduction
 

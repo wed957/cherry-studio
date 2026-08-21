@@ -34,45 +34,44 @@
   </a>
 </h1>
 <p align="center">
-  <a href="https://github.com/CherryHQ/cherry-studio">English</a> | 中文 | <a href="https://cherry-ai.com">官方网站</a> | <a href="https://docs.cherry-ai.com">文档</a> | <a href="./guides/development.md">开发</a> | <a href="https://github.com/CherryHQ/cherry-studio/issues">反馈</a><br>
+  <a href="https://github.com/CherryHQ/cherry-studio">English</a> | 中文 | <a href="https://docs.cherry-ai.com">文档</a> | <a href="./guides/development.md">开发</a> | <a href="https://github.com/CherryHQ/cherry-studio/issues">反馈</a><br>
 </p>
-
-<!-- 题头徽章组合 -->
-
-<div align="center">
-
-[![][deepwiki-shield]][deepwiki-link]
-[![][twitter-shield]][twitter-link]
-[![][discord-shield]][discord-link]
-[![][telegram-shield]][telegram-link]
-
-</div>
 
 <div align="center">
 
 [![][github-release-shield]][github-release-link]
 [![][github-contributors-shield]][github-contributors-link]
 [![][license-shield]][license-link]
-[![][commercial-shield]][commercial-link]
-[![][sponsor-shield]][sponsor-link]
-
-</div>
-
-<div align="center">
- <a href="https://hellogithub.com/repository/1605492e1e2a4df3be07abfa4578dd37" target="_blank" style="text-decoration: none"><img src="https://api.hellogithub.com/v1/widgets/recommend.svg?rid=1605492e1e2a4df3be07abfa4578dd37" alt="Featured｜HelloGitHub"  width="220" height="55" /></a>
- <a href="https://trendshift.io/repositories/11772" target="_blank" style="text-decoration: none"><img src="https://trendshift.io/api/badge/repositories/11772" alt="kangfenmao%2Fcherry-studio | Trendshift" width="220" height="55" /></a>
- <a href="https://www.producthunt.com/posts/cherry-studio?embed=true&utm_source=badge-featured&utm_medium=badge&utm_souce=badge-cherry&#0045;studio" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=496640&theme=light" alt="Cherry&#0032;Studio - AI&#0032;Chatbots&#0044;&#0032;AI&#0032;Desktop&#0032;Client | Product Hunt" width="220" height="55" /></a>
 </div>
 
 # 🍒 Cherry Studio
 
 Cherry Studio 是一款支持多个大语言模型（LLM）服务商的桌面客户端，兼容 Windows、Mac 和 Linux 系统。
 
-> 本私有衍生仓库跟随上游 `v1`，合并了泛化的上下文数量修复，并通过 GitHub Actions 只构建 Windows。同步、发布、自动更新限制和 AGPL-3.0 义务请参阅根目录的 [CUSTOM_BUILD.md](../../CUSTOM_BUILD.md)。
+> 本仓库是基于上游 Cherry Studio `v1.9.13` 独立维护、面向 Windows 的衍生版本，不是官方 `v2.x` 发布版。仓库维护受控的上游同步与发布流程；运行、自动更新和 AGPL-3.0 义务请参阅根目录的 [CUSTOM_BUILD.md](../../CUSTOM_BUILD.md)。
+
+本发行版采用 GNU Affero General Public License v3.0（AGPL-3.0-only）开源，不包含产品分析、崩溃遥测上传、自动 trace 导出、广告、赞助引导或企业版导流界面。开发者 trace 数据仅在明确启用时保留在本地设备，不会发送到远端服务。
 
 👏 欢迎加入 [Telegram 群组](https://t.me/CherryStudioAI)｜[Discord](https://discord.gg/wez8HtpxqQ) | [QQ群(575014769)](https://qm.qq.com/q/lo0D4qVZKi)
 
-❤️ 喜欢 Cherry Studio? 点亮小星星 🌟 或 [赞助开发者](./guides/sponsor.md)! ❤️
+## 衍生版本范围与变更
+
+本衍生版本有意基于上游 `v1.9.13` 维护，主要功能变更是扩展助手设置中的上下文数量：
+
+- 上下文数量输入框接受任意非负安全整数，包括超过旧版界面上限 `100` 的数值。
+- `100` 仍是唯一的“使用全部历史消息”界面哨兵值。大于 `100` 的数值按真实消息数量处理；运行时会将哨兵值转换为 `Number.MAX_SAFE_INTEGER`。
+- Slider 保留原有的视觉范围。已保存数值超出该范围时，仅钳制 Slider 的显示位置，不会覆盖已保存的数值。
+
+源码变更由 [`scripts/context-count-patch.ts`](../../scripts/context-count-patch.ts) 维护。该补丁器基于 AST 语义分析：
+
+- 只识别可信的上下文数量控件，并删除其顶层 `max` 限制；
+- 保持其他数字输入框和 Slider 不变；
+- 当组件身份、模块解析、状态绑定或源码结构存在歧义时 fail-closed，拒绝修改；
+- 所有目标验证通过后才写入，避免部分修改。
+
+补丁明确限定在上游 `v1.9.13` 的源码结构中，并会拒绝修改已经重构的 `v2.x` 源码。上游 `v2.x` 已原生支持不设上限的正整数输入，因此不要将本补丁应用到 `v2.x`。
+
+当前实现已通过上下文数量契约检查、109 项补丁器测试、完整类型检查和 Electron/Vite 生产构建。
 
 # 📖 使用教程
 
@@ -196,78 +195,6 @@ https://docs.cherry-ai.com
 
 感谢您的支持和贡献！
 
-# 🔧 开发者共创计划
-
-我们正在启动 Cherry Studio 开发者共创计划，旨在为开源生态系统构建一个健康、正向反馈的循环。我们相信，优秀的软件是通过协作构建的，每一个合并的拉取请求都为项目注入新的生命力。
-
-我们诚挚地邀请您加入我们的贡献者队伍，与我们一起塑造 Cherry Studio 的未来。
-
-## 贡献者奖励计划
-
-为了回馈我们的核心贡献者并创造良性循环，我们建立了以下长期激励计划。
-
-**该计划的首个跟踪周期将是 2025 年第三季度（7月、8月、9月）。此周期的奖励将在 10月1日 发放。**
-
-在任何跟踪周期内（例如，首个周期的 7月1日 至 9月30日），任何为 Cherry Studio 在 GitHub 上的开源项目贡献超过 **30 个有意义提交** 的开发者都有资格获得以下福利：
-
-- **Cursor 订阅赞助**：获得 **70 美元** 的 [Cursor](https://cursor.sh/) 订阅积分或报销，让 AI 成为您最高效的编码伙伴。
-- **无限模型访问**：获得 **DeepSeek** 和 **Qwen** 模型的 **无限次** API 调用。
-- **前沿技术访问**：享受偶尔的特殊福利，包括 **Claude**、**Gemini** 和 **OpenAI** 等模型的 API 访问权限，让您始终站在技术前沿。
-
-## 共同成长与未来规划
-
-活跃的社区是任何可持续开源项目背后的推动力。随着 Cherry Studio 的发展，我们的奖励计划也将随之发展。我们致力于持续将我们的福利与行业内最优秀的工具和资源保持一致。这确保我们的核心贡献者获得有意义的支持，创造一个开发者、社区和项目共同成长的正向循环。
-
-**展望未来，该项目还将采取越来越开放的态度来回馈整个开源社区。**
-
-## 如何开始？
-
-我们期待您的第一个拉取请求！
-
-您可以从探索我们的仓库开始，选择一个 `good first issue`，或者提出您自己的改进建议。每一个提交都是开源精神的体现。
-
-感谢您的关注和贡献。
-
-让我们一起建设。
-
-# 🏢 企业版
-
-在社区版的基础上，我们自豪地推出 **Cherry Studio 企业版**——一个为现代团队和企业设计的私有部署 AI 生产力与管理平台。
-
-企业版通过集中管理 AI 资源、知识和数据，解决了团队协作中的核心挑战。它赋能组织提升效率、促进创新并确保合规，同时在安全环境中保持对数据的 100% 控制。
-
-## 核心优势
-
-- **统一模型管理**：集中整合和管理各种基于云的大语言模型（如 OpenAI、Anthropic、Google Gemini）和本地部署的私有模型。员工可以开箱即用，无需单独配置。
-- **企业级知识库**：构建、管理和分享全团队的知识库。确保知识得到保留且一致，使团队成员能够基于统一准确的信息与 AI 交互。
-- **细粒度访问控制**：通过统一的管理后台轻松管理员工账户，并为不同模型、知识库和功能分配基于角色的权限。
-- **完全私有部署**：在您的本地服务器或私有云上部署整个后端服务，确保您的数据 100% 私有且在您的控制之下，满足最严格的安全和合规标准。
-- **可靠的后端服务**：提供稳定的 API 服务、企业级数据备份和恢复机制，确保业务连续性。
-
-## ✨ 在线演示
-
-> 🚧 **公开测试版通知**
->
-> 企业版目前处于早期公开测试阶段，我们正在积极迭代和优化其功能。我们知道它可能还不够完全稳定。如果您在试用过程中遇到任何问题或有宝贵建议，我们非常感谢您能通过邮件联系我们提供反馈。
-
-**🔗 [Cherry Studio 企业版](https://enterprise.cherry-ai.com)**
-
-## 版本对比
-
-| 功能         | 社区版                  | 企业版                                                                                         |
-| :----------- | :---------------------- | :--------------------------------------------------------------------------------------------- |
-| **开源**     | ✅ 是                   | ⭕️ 部分开源，对客户开放                                                                        |
-| **成本**     | 个人使用免费 / 商业授权 | 买断 / 订阅费用                                                                                |
-| **管理后台** | —                       | ● 集中化**模型**访问<br>● **员工**管理<br>● 共享**知识库**<br>● **访问**控制<br>● **数据**备份 |
-| **服务器**   | —                       | ✅ 专用私有部署                                                                                |
-
-## 获取企业版
-
-我们相信企业版将成为您团队的 AI 生产力引擎。如果您对 Cherry Studio 企业版感兴趣，希望了解更多信息、请求报价或安排演示，请联系我们。
-
-- **商业咨询与购买**：
-  **📧 [bd@cherry-ai.com](mailto:bd@cherry-ai.com)**
-
 # 🔗 相关项目
 
 - [one-api](https://github.com/songquanpeng/one-api)：LLM API 管理及分发系统，支持 OpenAI、Azure、Anthropic 等主流模型，统一 API 接口，可用于密钥管理与二次分发。
@@ -281,43 +208,12 @@ https://docs.cherry-ai.com
 </a>
 <br /><br />
 
-# 📊 GitHub 统计
-
-![Stats](https://repobeats.axiom.co/api/embed/a693f2e5f773eed620f70031e974552156c7f397.svg "Repobeats analytics image")
-
-# ⭐️ Star 记录
-
-<a href="https://www.star-history.com/#CherryHQ/cherry-studio&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=CherryHQ/cherry-studio&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=CherryHQ/cherry-studio&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=CherryHQ/cherry-studio&type=Date" />
- </picture>
-</a>
-
 <!-- Links & Images -->
-
-[deepwiki-shield]: https://img.shields.io/badge/Deepwiki-CherryHQ-0088CC
-[deepwiki-link]: https://deepwiki.com/CherryHQ/cherry-studio
-[twitter-shield]: https://img.shields.io/badge/Twitter-CherryStudioApp-0088CC?logo=x
-[twitter-link]: https://twitter.com/CherryStudioHQ
-[discord-shield]: https://img.shields.io/badge/Discord-@CherryStudio-0088CC?logo=discord
-[discord-link]: https://discord.gg/wez8HtpxqQ
-[telegram-shield]: https://img.shields.io/badge/Telegram-@CherryStudioAI-0088CC?logo=telegram
-[telegram-link]: https://t.me/CherryStudioAI
-
-<!-- 项目统计徽章 -->
 
 [github-release-shield]: https://img.shields.io/github/v/release/CherryHQ/cherry-studio
 [github-release-link]: https://github.com/CherryHQ/cherry-studio/releases
 [github-contributors-shield]: https://img.shields.io/github/contributors/CherryHQ/cherry-studio
 [github-contributors-link]: https://github.com/CherryHQ/cherry-studio/graphs/contributors
 
-<!-- 许可和赞助徽章 -->
-
 [license-shield]: https://img.shields.io/badge/License-AGPLv3-important.svg?logo=gnu
 [license-link]: https://www.gnu.org/licenses/agpl-3.0
-[commercial-shield]: https://img.shields.io/badge/商用授权-联系-white.svg?logoColor=white&logo=telegram&color=blue
-[commercial-link]: mailto:license@cherry-ai.com?subject=商业授权咨询
-[sponsor-shield]: https://img.shields.io/badge/赞助支持-FF6699.svg?logo=githubsponsors&logoColor=white
-[sponsor-link]: https://github.com/CherryHQ/cherry-studio/blob/main/docs/sponsor.md
