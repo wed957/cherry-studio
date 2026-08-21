@@ -170,7 +170,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   build:
-    name: Test and build Windows x64/arm64
+    name: Test and build Windows x64
     needs: resolve
     if: needs.resolve.outputs.publish_only != 'true'
     runs-on: windows-2022
@@ -244,8 +244,9 @@ jobs:
             throw 'Candidate checks modified tracked files.'
           }
 
-      - name: Build Windows x64 and arm64
-        run: pnpm build:win
+      - name: Build Windows x64 installer
+        # nsis-only, x64-only: the release page ships exactly one installer.
+        run: pnpm build && pnpm exec electron-builder --win nsis --x64
         env:
           NODE_OPTIONS: --max-old-space-size=8192
           MAIN_VITE_CHERRYAI_CLIENT_SECRET: ${{ secrets.MAIN_VITE_CHERRYAI_CLIENT_SECRET }}
@@ -289,6 +290,11 @@ jobs:
           }
           if (-not $files) { throw 'No releasable files were generated in dist.' }
 
+          $excluded = @($files | Where-Object { $_.Name -match 'arm64' -or $_.Name -like '*-portable.*' })
+          if ($excluded.Count -gt 0) {
+            throw "Build produced artifacts outside the x64 installer scope: $($excluded.Name -join ', ')"
+          }
+
           foreach ($file in $files) {
             $assetPath = [IO.Path]::GetFullPath($file.FullName)
             if (($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or $file.LinkType) {
@@ -300,12 +306,7 @@ jobs:
             }
           }
 
-          $requiredInstallers = @(
-            '*-arm64-portable.exe',
-            '*-arm64-setup.exe',
-            '*-x64-portable.exe',
-            '*-x64-setup.exe'
-          )
+          $requiredInstallers = @('*-x64-setup.exe')
           foreach ($pattern in $requiredInstallers) {
             $matches = @($files | Where-Object { $_.Name -like $pattern })
             if ($matches.Count -ne 1) {
@@ -452,11 +453,7 @@ jobs:
 
             awk '$0 != "SHA256SUMS.txt"' "$all_assets" > "$manifest_assets.actual" || return 1
             diff --unified "$manifest_assets" "$manifest_assets.actual" || return 1
-            for pattern in \
-              '*-arm64-portable.exe' \
-              '*-arm64-setup.exe' \
-              '*-x64-portable.exe' \
-              '*-x64-setup.exe'; do
+            for pattern in '*-x64-setup.exe'; do
               count=0
               while IFS= read -r name; do
                 # shellcheck disable=SC2053
@@ -491,9 +488,6 @@ jobs:
           rm -rf -- "$fixture_dir"
           mkdir "$fixture_dir"
           for fixture_asset in \
-            fixture-arm64-portable.exe \
-            fixture-arm64-setup.exe \
-            fixture-x64-portable.exe \
             fixture-x64-setup.exe \
             latest-fixture.yml; do
             printf 'fixture\n' > "$fixture_dir/$fixture_asset"
@@ -501,9 +495,6 @@ jobs:
           (
             cd "$fixture_dir"
             sha256sum --text \
-              fixture-arm64-portable.exe \
-              fixture-arm64-setup.exe \
-              fixture-x64-portable.exe \
               fixture-x64-setup.exe \
               latest-fixture.yml > SHA256SUMS.txt
             printf 'not listed in SHA256SUMS.txt\n' > unlisted.zip
@@ -577,11 +568,7 @@ jobs:
             awk '$0 != "SHA256SUMS.txt"' "$all_assets" > "$manifest_assets.actual" || return 1
             diff --unified "$manifest_assets" "$manifest_assets.actual" >/dev/null || return 1
 
-            for pattern in \
-              '*-arm64-portable.exe' \
-              '*-arm64-setup.exe' \
-              '*-x64-portable.exe' \
-              '*-x64-setup.exe'; do
+            for pattern in '*-x64-setup.exe'; do
               count=0
               while IFS= read -r name; do
                 # shellcheck disable=SC2053
@@ -1225,11 +1212,7 @@ jobs:
             LC_ALL=C sort -o "$checksum_assets" "$checksum_assets" || return 1
             awk '$0 != "SHA256SUMS.txt"' "$all_assets" > "$checksum_assets.actual" || return 1
             diff --unified "$checksum_assets" "$checksum_assets.actual" >/dev/null || return 1
-            for pattern in \
-              '*-arm64-portable.exe' \
-              '*-arm64-setup.exe' \
-              '*-x64-portable.exe' \
-              '*-x64-setup.exe'; do
+            for pattern in '*-x64-setup.exe'; do
               count=0
               while IFS= read -r name; do
                 # shellcheck disable=SC2053
@@ -1526,11 +1509,7 @@ jobs:
             LC_ALL=C sort -o "$checksum_assets" "$checksum_assets" || return 1
             awk '$0 != "SHA256SUMS.txt"' "$all_assets" > "$checksum_assets.actual" || return 1
             diff --unified "$checksum_assets" "$checksum_assets.actual" >/dev/null || return 1
-            for pattern in \
-              '*-arm64-portable.exe' \
-              '*-arm64-setup.exe' \
-              '*-x64-portable.exe' \
-              '*-x64-setup.exe'; do
+            for pattern in '*-x64-setup.exe'; do
               count=0
               while IFS= read -r name; do
                 # shellcheck disable=SC2053
