@@ -1766,6 +1766,7 @@ jobs:
           assert_same_published_release "$release_id"
 
           # The upload set equals the filtered expectation: installer only.
+          publication_assets="$RUNNER_TEMP/rolling-publication-assets.txt"
           cp -- "$expected_assets" "$publication_assets"
           while IFS= read -r asset; do
             upload_release_asset "$release_id" "release-staging/$asset"
