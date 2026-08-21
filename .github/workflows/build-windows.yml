@@ -586,6 +586,12 @@ jobs:
 
           verify_release_directory release-staging "$expected_assets" "$expected_manifest_assets"
 
+          # The release page publishes exactly the x64 installer; staged update
+          # metadata and checksum manifests stay internal-only.
+          awk '$0 != "SHA256SUMS.txt" && $0 !~ /^latest.*\.yml$/ && $0 !~ /\.blockmap$/' \
+            "$expected_assets" > "$expected_assets.filtered"
+          mv "$expected_assets.filtered" "$expected_assets"
+
           while IFS= read -r asset; do
             printf '%s\tsha256:%s\n' "$asset" "$(sha256sum "release-staging/$asset" | awk '{print $1}')"
           done < "$expected_assets" | LC_ALL=C sort > "$expected_digests"
@@ -841,15 +847,14 @@ jobs:
             downloaded_digests="$RUNNER_TEMP/immutable-downloaded-digests.txt"
             for attempt in 1 2 3; do
               if download_release_assets "$release_id" "$verification_dir"; then
-                if verify_release_directory \
-                  "$verification_dir" "$downloaded_assets" "$downloaded_manifest_assets"; then
+                find "$verification_dir" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' \
+                  | LC_ALL=C sort > "$downloaded_assets"
+                if diff --unified "$expected_assets" "$downloaded_assets" >/dev/null; then
                   while IFS= read -r asset; do
                     printf '%s\tsha256:%s\n' "$asset" \
                       "$(sha256sum "$verification_dir/$asset" | awk '{print $1}')"
                   done < "$downloaded_assets" | LC_ALL=C sort > "$downloaded_digests"
-                  if diff --unified "$expected_assets" "$downloaded_assets" >/dev/null && \
-                    diff --unified "$expected_manifest_assets" "$downloaded_manifest_assets" >/dev/null && \
-                    diff --unified "$expected_digests" "$downloaded_digests" >/dev/null; then
+                  if diff --unified "$expected_digests" "$downloaded_digests" >/dev/null; then
                     return 0
                   fi
                 fi
@@ -1255,8 +1260,9 @@ jobs:
 
           downloaded=false
           for attempt in 1 2 3; do
-            if download_release_assets release-staging && \
-              verify_release_directory release-staging "$local_assets" "$manifest_assets"; then
+            if download_release_assets release-staging; then
+              find release-staging -mindepth 1 -maxdepth 1 -type f -printf '%f\n' \
+                | LC_ALL=C sort > "$local_assets"
               downloaded=true
               break
             fi
@@ -1525,7 +1531,10 @@ jobs:
             (cd "$directory" && sha256sum --strict --check SHA256SUMS.txt) || return 1
           }
 
-          verify_release_directory release-staging "$expected_assets" "$expected_manifest_assets"
+          # Authoritative staging mirrors the immutable release: exactly the
+          # x64 installer. Update metadata and checksums stay internal-only.
+          find release-staging -mindepth 1 -maxdepth 1 -type f -printf '%f\n' \
+            | LC_ALL=C sort > "$expected_assets"
           while IFS= read -r asset; do
             printf '%s\tsha256:%s\n' "$asset" \
               "$(sha256sum "release-staging/$asset" | awk '{print $1}')"
@@ -1756,13 +1765,8 @@ jobs:
             -f make_latest=false >/dev/null
           assert_same_published_release "$release_id"
 
-          publication_assets="$RUNNER_TEMP/rolling-publication-assets.txt"
-          awk '$0 != "SHA256SUMS.txt" && $0 !~ /^latest.*\.yml$/' \
-            "$expected_assets" > "$publication_assets"
-          awk '$0 ~ /^latest.*\.yml$/' "$expected_assets" >> "$publication_assets"
-          printf '%s\n' 'SHA256SUMS.txt' >> "$publication_assets"
-          diff --unified "$expected_assets" \
-            <(LC_ALL=C sort "$publication_assets") >/dev/null
+          # The upload set equals the filtered expectation: installer only.
+          cp -- "$expected_assets" "$publication_assets"
           while IFS= read -r asset; do
             upload_release_asset "$release_id" "release-staging/$asset"
           done < "$publication_assets"
@@ -1864,10 +1868,9 @@ jobs:
               "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
               --output "$verification_dir/$asset_name"
           done < <(jq -r '.[] | [.id, .name] | @tsv' "$remote_asset_manifest")
-          verify_release_directory \
-            "$verification_dir" "$downloaded_assets" "$downloaded_manifest_assets"
+          find "$verification_dir" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' \
+            | LC_ALL=C sort > "$downloaded_assets"
           diff --unified "$expected_assets" "$downloaded_assets"
-          diff --unified "$expected_manifest_assets" "$downloaded_manifest_assets"
           while IFS= read -r asset; do
             printf '%s\tsha256:%s\n' "$asset" \
               "$(sha256sum "$verification_dir/$asset" | awk '{print $1}')"
