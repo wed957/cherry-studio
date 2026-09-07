@@ -1,232 +1,126 @@
-<div align="right" >
-  <details>
-    <summary >🌐 Language</summary>
-    <div>
-      <div align="right">
-        <p><a href="https://openaitx.github.io/view.html?user=CherryHQ&project=cherry-studio&lang=en">English</a></p>
-        <p><a href="https://openaitx.github.io/view.html?user=CherryHQ&project=cherry-studio&lang=zh-CN">简体中文</a></p>
-        <p><a href="https://openaitx.github.io/view.html?user=CherryHQ&project=cherry-studio&lang=zh-TW">繁體中文</a></p>
-        <p><a href="https://openaitx.github.io/view.html?user=CherryHQ&project=cherry-studio&lang=ja">日本語</a></p>
-        <p><a href="https://openaitx.github.io/view.html?user=CherryHQ&project=cherry-studio&lang=ko">한국어</a></p>
-        <p><a href="https://openaitx.github.io/view.html?user=CherryHQ&project=cherry-studio&lang=hi">हिन्दी</a></p>
-        <p><a href="https://openaitx.github.io/view.html?user=CherryHQ&project=cherry-studio&lang=th">ไทย</a></p>
-        <p><a href="https://openaitx.github.io/view.html?user=CherryHQ&project=cherry-studio&lang=fr">Français</a></p>
-        <p><a href="https://openaitx.github.io/view.html?user=CherryHQ&project=cherry-studio&lang=de">Deutsch</a></p>
-        <p><a href="https://openaitx.github.io/view.html?user=CherryHQ&project=cherry-studio&lang=es">Español</a></p>
-        <p><a href="https://openaitx.github.io/view.html?user=CherryHQ&project=cherry-studio&lang=it">Italiano</a></p>
-        <p><a href="https://openaitx.github.io/view.html?user=CherryHQ&project=cherry-studio&lang=ru">Русский</a></p>
-        <p><a href="https://openaitx.github.io/view.html?user=CherryHQ&project=cherry-studio&lang=pt">Português</a></p>
-        <p><a href="https://openaitx.github.io/view.html?user=CherryHQ&project=cherry-studio&lang=nl">Nederlands</a></p>
-        <p><a href="https://openaitx.github.io/view.html?user=CherryHQ&project=cherry-studio&lang=pl">Polski</a></p>
-        <p><a href="https://openaitx.github.io/view.html?user=CherryHQ&project=cherry-studio&lang=ar">العربية</a></p>
-        <p><a href="https://openaitx.github.io/view.html?user=CherryHQ&project=cherry-studio&lang=fa">فارسی</a></p>
-        <p><a href="https://openaitx.github.io/view.html?user=CherryHQ&project=cherry-studio&lang=tr">Türkçe</a></p>
-        <p><a href="https://openaitx.github.io/view.html?user=CherryHQ&project=cherry-studio&lang=vi">Tiếng Việt</a></p>
-        <p><a href="https://openaitx.github.io/view.html?user=CherryHQ&project=cherry-studio&lang=id">Bahasa Indonesia</a></p>
-      </div>
-    </div>
-  </details>
-</div>
+<p align="center"><img src="build/icon.png" alt="Cherry Studio 图标" width="88"></p>
+<h1 align="center">Cherry Studio · Windows</h1>
+<p align="center">wed957 维护的 v1 衍生构建 · 多模型桌面工作台</p>
+<p align="center">
+  <img alt="Electron 41" src="https://img.shields.io/badge/Electron-41-47848F?style=flat-square">
+  <img alt="React 19" src="https://img.shields.io/badge/React-19-087EA4?style=flat-square">
+  <img alt="Windows x64 and arm64" src="https://img.shields.io/badge/Windows-x64%20%2F%20arm64-0078D4?style=flat-square">
+  <a href="LICENSE"><img alt="AGPL 3.0" src="https://img.shields.io/badge/License-AGPL--3.0-16803C?style=flat-square"></a>
+</p>
+<p align="center">
+  <a href="https://github.com/wed957/cherry-studio/releases/tag/windows-latest">Windows 下载</a> · <a href="#架构">架构</a> · <a href="#开发与构建">开发</a> · <a href="CUSTOM_BUILD.md">构建与同步详解</a> · <a href="AGENTS.md">Agent 约定</a>
+</p>
+
+---
+
+基于 [CherryHQ/cherry-studio](https://github.com/CherryHQ/cherry-studio) 稳定 `v1` 分支的独立公开仓库，保留本地修复并维护 Windows 发行流程。当前应用版本字段为 `1.9.13`；这是社区衍生构建，不是 CherryHQ 官方发行，也不是 v2.x 实现。
 
-<h1 align="center">
-  <a href="https://github.com/CherryHQ/cherry-studio/releases">
-    <img src="https://github.com/CherryHQ/cherry-studio/blob/main/build/icon.png?raw=true" width="150" height="150" alt="banner" /><br>
-  </a>
-</h1>
+| 工作场景 | 主要能力 |
+| --- | --- |
+| 多模型对话 | Provider、助手、话题、流式消息与模型参数 |
+| 本地知识管理 | 文件、知识库、检索和笔记 |
+| 工具与 Agent | MCP、工具调用、Agent 会话与本地服务 |
+| 桌面集成 | Electron 主进程、受控 IPC、本地存储与 Windows 安装包 |
 
-<p align="center">English | <a href="./docs/zh/README.md">中文</a> | <a href="https://docs.cherry-ai.com/docs/en-us">Documents</a> | <a href="./docs/en/guides/development.md">Development</a> | <a href="https://github.com/CherryHQ/cherry-studio/issues">Feedback</a><br></p>
+## 本仓库的维护重点
 
-<div align="center">
+**上下文数量的真实语义。** 数字输入接受非负安全整数；`100` 是唯一的“全部消息”哨兵，`101`、`1000` 等值仍表示真实数量上限。滑块只钳制视觉显示，不覆盖已保存的大数值。
 
-[![][github-release-shield]][github-release-link]
-[![][github-nightly-shield]][github-nightly-link]
-[![][github-contributors-shield]][github-contributors-link]
-[![][license-shield]][license-link]
-</div>
+**可重复核对的补丁。** [context-count-patch.ts](scripts/context-count-patch.ts) 通过 TypeScript AST 验证可信控件和状态绑定，先检查全部目标再写入；未知结构、目标变化或 v2.x 源码树会停止处理。
 
-# 🍒 Cherry Studio
+**Windows 发布链。** 保留上游归属，针对 x64 / arm64 构建 portable 和 setup；通过精确提交、产物清单、SHA-256 和 Release 身份核对保持可追溯性。上游同步分支 `upstream-v1` 用于记录同步位置。
 
-Cherry Studio is a desktop client that supports multiple LLM providers, available on Windows, Mac and Linux.
+模型调用、搜索与用户启用的外部工具仍会访问相应服务。产品遥测与显式启用的开发追踪是不同边界，不能把本地存储描述为应用完全离线。
 
-> This repository is an independently maintained, Windows-focused derivative of upstream Cherry Studio `v1.9.13`. It is not an official `v2.x` release. The repository maintains a controlled upstream synchronization and release workflow; see [CUSTOM_BUILD.md](./CUSTOM_BUILD.md) for operational, updater, and AGPL-3.0 details.
+## 架构
 
-This is an open-source distribution under the GNU Affero General Public License v3.0 (AGPL-3.0-only). It contains no product analytics, crash telemetry uploads, automatic trace exporters, advertisements, sponsor prompts, or enterprise upsell UI. Developer trace data, when explicitly enabled, remains local to the device and is never sent to a remote service.
+```mermaid
+flowchart TD
+    A["React Renderer：助手 / 消息 / 知识库"] --> B["Preload：contextBridge / IPC"]
+    B --> C["Electron Main：窗口、文件、MCP 与 Agent 服务"]
+    A --> D["Redux / Dexie"]
+    C --> E["LibSQL / Drizzle 与本地文件"]
+    A --> F["aiCore / AI SDK Provider"]
+    C --> F
+    F --> G["模型服务与用户配置的工具"]
+    style A fill:#eaf3ff,stroke:#0969da
+    style B fill:#fff4dc,stroke:#9a6700
+    style E fill:#eaf7ee,stroke:#16803c
+```
 
-👏 Join [Telegram Group](https://t.me/CherryStudioAI)｜[Discord](https://discord.gg/wez8HtpxqQ) | [QQ Group(575014769)](https://qm.qq.com/q/lo0D4qVZKi)
+| 层 | 当前技术 | 代码入口 |
+| --- | --- | --- |
+| 桌面运行时 | Electron `41.2.1` | [src/main/](src/main/) |
+| 界面 | React `19`、TypeScript、Ant Design | [src/renderer/src/](src/renderer/src/) |
+| 进程边界 | contextBridge、IPC | [src/preload/](src/preload/)、[packages/shared/](packages/shared/) |
+| 状态与数据 | Redux Toolkit、Dexie、Drizzle / LibSQL | renderer 数据库与 main 服务 |
+| 模型适配 | Vercel AI SDK `6`、aiCore | [packages/aiCore/](packages/aiCore/)、[packages/ai-sdk-provider/](packages/ai-sdk-provider/) |
+| 构建与测试 | electron-vite、electron-builder、Vitest、Playwright | [package.json](package.json)、[工作流](.github/workflows/) |
 
-## Derivative Scope and Changes
+版本要求以 `package.json`、锁文件和 `.node-version` 为准；旧版上游文档中的 Electron 38 / AI SDK 5 不适用于当前依赖树。
 
-This derivative is intentionally scoped to the upstream `v1.9.13` codebase. Its primary functional change is a generalized context-count implementation for assistant settings:
+## 下载与发行
 
-- Context-count number fields accept any non-negative safe integer, including values greater than the legacy UI limit of `100`.
-- `100` remains the only UI sentinel for unlimited history. Values greater than `100` are treated as real message limits; runtime handling maps the sentinel to `Number.MAX_SAFE_INTEGER`.
-- Sliders keep their original visual range. When a saved value exceeds that range, only the slider position is clamped for display; the saved value is never overwritten.
+日常下载使用 [windows-latest](https://github.com/wed957/cherry-studio/releases/tag/windows-latest)。核对来源或排查滚动发布中断时，使用同一提交对应的 `windows-<完整 SHA>` 不可变 Release 和 `SHA256SUMS.txt`。
 
-The source-level change is maintained by [`scripts/context-count-patch.ts`](./scripts/context-count-patch.ts), an AST-based patcher that:
+| 标识 | 用途 |
+| --- | --- |
+| `windows-<完整 SHA>` | 权威构建与固定审计记录 |
+| `windows-latest` | 方便下载的滚动入口 |
+| `upstream-v1` | 最近一次同步的上游提交 |
+| `automation/upstream-candidate-*` | 待测试和发布的候选分支 |
 
-- identifies only trusted context-count controls and removes only their top-level `max` constraint;
-- leaves unrelated numeric inputs and sliders unchanged;
-- fails closed when component identity, module resolution, state binding, or source structure is ambiguous; and
-- validates all targets before writing, preventing partial source updates.
+自动同步先准备候选并执行补丁契约，完成测试、构建和不可变发布验证后再晋级分支，最后刷新滚动入口。滚动 Release 的 tag、元数据和全部资产无法由 GitHub 原子更新；更新中断时以已验证的不可变 Release 为准，恢复流程见 [CUSTOM_BUILD.md](CUSTOM_BUILD.md)。
 
-The patch is deliberately version-scoped. It targets the upstream `v1.9.13` layout and refuses to modify the restructured `v2.x` source tree. Upstream `v2.x` already supports unrestricted positive integer input natively, so this patch must not be applied to `v2.x`.
+推送 `main` 会触发现有 Windows 构建流程。Linux / macOS 脚本仍来自上游源码，本仓库的发行维护范围是 Windows。
 
-The current implementation has been verified with the context-count contract check, 109 patcher tests, full type checking, and a complete Electron/Vite production build.
+## 开发与构建
 
-# 🌠 Screenshot
+需要 **Node.js 24.11.1+、pnpm 10.27.0**。Windows 安装包需要 Windows 构建环境；运行项目命令前完成依赖安装：
 
-![](https://github.com/user-attachments/assets/36dddb2c-e0fb-4a5f-9411-91447bab6e18)
+```powershell
+git clone https://github.com/wed957/cherry-studio.git
+cd cherry-studio
+corepack enable
+corepack pnpm install --frozen-lockfile
+corepack pnpm dev
+```
 
-![](https://github.com/user-attachments/assets/f549e8a0-2385-40b4-b52b-2039e39f2930)
+本地上下文补丁核对：
 
-![](https://github.com/user-attachments/assets/58e0237c-4d36-40de-b428-53051d982026)
+```powershell
+corepack pnpm context-count:check
+corepack pnpm exec vitest run scripts/context-count-patch.test.ts --silent
+```
 
-# 🌟 Key Features
+`context-count:apply` 会写源码；只有确实需要重应用补丁时才执行。同步与发布逻辑的完整验证命令见 [CUSTOM_BUILD.md](CUSTOM_BUILD.md)。
 
-1. **Diverse LLM Provider Support**:
+```powershell
+corepack pnpm ci:basic-check
+corepack pnpm test
+corepack pnpm build:win
+```
 
-- ☁️ Major LLM Cloud Services: OpenAI, Gemini, Anthropic, and more
-- 🔗 AI Web Service Integration: Claude, Perplexity, [Poe](https://poe.com/), and others
-- 💻 Local Model Support with Ollama, LM Studio
+这些是开发验证入口，不表示本次文档提交已执行全量构建。`pnpm lint` 和 `pnpm format` 包含写入行为，运行后要复核差异。
 
-2. **AI Assistants & Conversations**:
+## 维护与 Agent 接手
 
-- 📚 300+ Pre-configured AI Assistants
-- 🤖 Custom Assistant Creation
-- 💬 Multi-model Simultaneous Conversations
+1. 先读 [AGENTS.md](AGENTS.md) 和 [CUSTOM_BUILD.md](CUSTOM_BUILD.md)，确认目标是本仓库 v1 衍生线。
+2. 功能改动按 renderer、preload、main、aiCore 定位；跨进程接口同步检查共享类型与调用方。
+3. 上下文数量改动同时检查 [contextCount.ts](src/renderer/src/utils/contextCount.ts)、[相关测试](src/renderer/src/utils/__tests__/contextCount.test.ts) 和 AST 补丁契约。
+4. 同步与发布改动同时检查 [sync-upstream.yml](.github/workflows/sync-upstream.yml) 和 [build-windows.yml](.github/workflows/build-windows.yml)，保留候选事务、固定 SHA、权限和产物校验。
+5. 提交使用 Conventional Commits，并带 `git commit --signoff`；验证结果写明具体提交与范围。
 
-3. **Document & Data Processing**:
+上游功能文档可从 [中文文档](docs/zh/README.md) 和 [开发指南](docs/en/guides/development.md) 继续阅读，其中涉及发行和本地补丁的内容以本仓库说明为准。
 
-- 📄 Supports Text, Images, Office, PDF, and more
-- ☁️ WebDAV File Management and Backup
-- 📊 Mermaid Chart Visualization
-- 💻 Code Syntax Highlighting
+<a id="-community"></a>
 
-4. **Practical Tools Integration**:
+## 问题与交流
 
-- 🔍 Global Search Functionality
-- 📝 Topic Management System
-- 🔤 AI-powered Translation
-- 🎯 Drag-and-drop Sorting
-- 🔌 Mini Program Support
-- ⚙️ MCP(Model Context Protocol) Server
+本构建的上下文补丁、同步与 Windows 发布问题可提交到 [本仓库 Issues](https://github.com/wed957/cherry-studio/issues)，附版本、提交和脱敏后的复现步骤。通用产品讨论与上游社区入口见 [CherryHQ 项目](https://github.com/CherryHQ/cherry-studio)。
 
-5. **Enhanced User Experience**:
+## 许可与致谢
 
-- 🖥️ Cross-platform Support for Windows, Mac, and Linux
-- 📦 Ready to Use - No Environment Setup Required
-- 🎨 Light/Dark Themes and Transparent Window
-- 📝 Complete Markdown Rendering
-- 🤲 Easy Content Sharing
+源码沿用 [AGPL-3.0](LICENSE)。分发修改后的软件应保留版权、许可与对应源码；通过网络提供修改版本的服务时也应遵守适用条款。独立仓库身份不改变上游归属，也不代表获得 Cherry Studio 商标或外部服务的额外授权。
 
-# 📝 Roadmap
-
-We're actively working on the following features and improvements:
-
-1. 🎯 **Core Features**
-
-- Selection Assistant with smart content selection enhancement
-- Deep Research with advanced research capabilities
-- Memory System with global context awareness
-- Document Preprocessing with improved document handling
-- MCP Marketplace for Model Context Protocol ecosystem
-
-2. 🗂 **Knowledge Management**
-
-- Notes and Collections
-- Dynamic Canvas visualization
-- OCR capabilities
-- TTS (Text-to-Speech) support
-
-3. 📱 **Platform Support**
-
-- HarmonyOS Edition (PC)
-- Android App (Phase 1)
-- iOS App (Phase 1)
-- Multi-Window support
-- Window Pinning functionality
-- Intel AI PC (Core Ultra) Support
-
-4. 🔌 **Advanced Features**
-
-- Plugin System
-- ASR (Automatic Speech Recognition)
-- Assistant and Topic Interaction Refactoring
-
-Track our progress and contribute on our [project board](https://github.com/orgs/CherryHQ/projects/7).
-
-Want to influence our roadmap? Join our [GitHub Discussions](https://github.com/CherryHQ/cherry-studio/discussions) to share your ideas and feedback!
-
-# 🌈 Theme
-
-- Theme Gallery: <https://cherrycss.com>
-- Aero Theme: <https://github.com/hakadao/CherryStudio-Aero>
-- PaperMaterial Theme: <https://github.com/rainoffallingstar/CherryStudio-PaperMaterial>
-- Claude dynamic-style: <https://github.com/bjl101501/CherryStudio-Claudestyle-dynamic>
-- Maple Neon Theme: <https://github.com/BoningtonChen/CherryStudio_themes>
-
-Welcome PR for more themes
-
-# 🤝 Contributing
-
-We welcome contributions to Cherry Studio! Here are some ways you can contribute:
-
-1. **Contribute Code**: Develop new features or optimize existing code.
-2. **Fix Bugs**: Submit fixes for any bugs you find.
-3. **Maintain Issues**: Help manage GitHub issues.
-4. **Product Design**: Participate in design discussions.
-5. **Write Documentation**: Improve user manuals and guides.
-6. **Community Engagement**: Join discussions and help users.
-7. **Promote Usage**: Spread the word about Cherry Studio.
-
-Refer to the [Branching Strategy](docs/en/guides/branching-strategy.md) for contribution guidelines
-
-## Getting Started
-
-1. **Fork the Repository**: Fork and clone it to your local machine.
-2. **Create a Branch**: For your changes.
-3. **Submit Changes**: Commit and push your changes.
-4. **Open a Pull Request**: Describe your changes and reasons.
-
-For more detailed guidelines, please refer to our [Contributing Guide](CONTRIBUTING.md).
-
-Thank you for your support and contributions!
-
-# 🔗 Related Projects
-
-- [new-api](https://github.com/QuantumNous/new-api): The next-generation LLM gateway and AI asset management system supports multiple languages.
-
-- [one-api](https://github.com/songquanpeng/one-api): LLM API management and distribution system supporting mainstream models like OpenAI, Azure, and Anthropic. Features a unified API interface, suitable for key management and secondary distribution.
-
-- [Poe](https://poe.com/): Poe gives you access to the best AI, all in one place. Explore GPT-5, Claude Opus 4.1, DeepSeek-R1, Veo 3, ElevenLabs, and millions of others.
-
-- [ublacklist](https://github.com/iorate/ublacklist): Blocks specific sites from appearing in Google search results
-
-# 🚀 Contributors
-
-<a href="https://github.com/CherryHQ/cherry-studio/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=CherryHQ/cherry-studio" />
-</a>
-<br /><br />
-
-# 📜 License
-
-The Cherry Studio Community Edition is governed by the standard GNU Affero General Public License v3.0 (AGPL-3.0), available at https://www.gnu.org/licenses/agpl-3.0.html.
-
-Use of the Cherry Studio Community Edition for commercial purposes is permitted, subject to full compliance with the terms and conditions of the AGPL-3.0 license.
-
-<!-- Links & Images -->
-
-<!-- Links & Images -->
-
-[github-release-shield]: https://img.shields.io/github/v/release/CherryHQ/cherry-studio?logo=github
-[github-release-link]: https://github.com/CherryHQ/cherry-studio/releases
-[github-nightly-shield]: https://img.shields.io/github/actions/workflow/status/CherryHQ/cherry-studio/nightly-build.yml?label=nightly%20build&logo=github
-[github-nightly-link]: https://github.com/CherryHQ/cherry-studio/actions/workflows/nightly-build.yml
-[github-contributors-shield]: https://img.shields.io/github/contributors/CherryHQ/cherry-studio?logo=github
-[github-contributors-link]: https://github.com/CherryHQ/cherry-studio/graphs/contributors
-
-<!-- Links & Images -->
-
-[license-shield]: https://img.shields.io/badge/License-AGPLv3-important.svg?logo=gnu
-[license-link]: https://www.gnu.org/licenses/agpl-3.0
+感谢 [CherryHQ](https://github.com/CherryHQ/cherry-studio) 及其贡献者。

@@ -45,7 +45,7 @@ If the skill is unavailable, directly read `.agents/skills/gh-create-issue/SKILL
 
 ## Development Commands
 
-- **Install**: `pnpm install` — Install all project dependencies (requires Node ≥22, pnpm 10.27.0)
+- **Install**: `pnpm install` — Install all project dependencies (requires Node ≥24.11.1, pnpm 10.27.0)
 - **Development**: `pnpm dev` — Runs Electron app in development mode with hot reload
 - **Debug**: `pnpm debug` — Starts with debugging; attach via `chrome://inspect` on port 9222
 - **Build Check**: `pnpm build:check` — **REQUIRED** before commits (`pnpm lint && pnpm test`)
@@ -198,7 +198,7 @@ src/core/
   options/      # Request option preparation
 ```
 
-- Built on Vercel AI SDK v5 (`ai` package) with `LanguageModelV2Middleware`
+- Built on Vercel AI SDK v6 (`ai` package) with `LanguageModelV3Middleware`
 - `HubProvider` aggregates multiple provider backends
 - Supports: OpenAI, Anthropic, Google, Azure, Mistral, Bedrock, Vertex, Ollama, Perplexity, xAI, HuggingFace, Cerebras, OpenRouter, Copilot, and more
 - Custom fork of openai package: `@cherrystudio/openai`
@@ -238,12 +238,12 @@ logger.error("message", error);
 
 | Layer | Technologies |
 |---|---|
-| Runtime | Electron 38, Node ≥22 |
+| Runtime | Electron 41.2.1, Node ≥24.11.1 |
 | Frontend | React 19, TypeScript ~5.8 |
 | UI | Ant Design 5.27, styled-components 6, TailwindCSS v4 |
 | State | Redux Toolkit, redux-persist, Dexie (IndexedDB) |
 | Rich Text | TipTap 3.2 (with Yjs collaboration) |
-| AI SDK | Vercel AI SDK v5 (`ai`), `@cherrystudio/ai-core` |
+| AI SDK | Vercel AI SDK v6 (`ai`), `@cherrystudio/ai-core` |
 | Build | electron-vite 5 with rolldown-vite 7 (experimental) |
 | Test | Vitest 3 (unit), Playwright (e2e) |
 | Lint/Format | ESLint 9, oxlint, Biome 2 |
